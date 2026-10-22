@@ -37,6 +37,8 @@ Or copy the folder anywhere and point your agent's skill directory at it:
 
 Requirements: Python 3.9+ and `ffmpeg`/`ffprobe` with `libass`, `boxblur` and `loudnorm`. Optional: [`edge-tts`](https://github.com/rany2/edge-tts) for the good voices (`doctor --fix` installs it); without it, the OS voice is used offline.
 
+> macOS note: Homebrew's `ffmpeg` 9 build ships without `libass`, so captions are skipped (with a warning). Use a full build - a static one from evermeet.cx, or any tap that bundles libass - if you want burned captions. Everything else renders fine with the Homebrew build.
+
 ## Use it
 
 Just hand your agent the recording:

@@ -7,13 +7,13 @@ One script, every OS. This file is what to install and what to expect where.
 | Need | Windows | macOS | Linux |
 |---|---|---|---|
 | Python 3.9+ | `winget install Python.Python.3.12` | preinstalled or `brew install python` | `sudo apt install python3` |
-| ffmpeg + ffprobe | `winget install Gyan.FFmpeg` | `brew install ffmpeg` | `sudo apt install ffmpeg` |
+| ffmpeg + ffprobe | `winget install Gyan.FFmpeg` | `brew install ffmpeg` (add a full build for captions, see below) | `sudo apt install ffmpeg` |
 | Best-quality TTS | `python -m pip install --user edge-tts` (needs internet) | same | same |
 | Offline TTS fallback | built in (PowerShell `System.Speech`) | built in (`say`) | `sudo apt install espeak-ng` |
 | OCR (optional) | `winget install UB-Mannheim.TesseractOCR` | `brew install tesseract` | `sudo apt install tesseract-ocr tesseract-ocr-spa` |
 
 `ffmpeg` builds that matter: you need `libass` for captions, `boxblur`, `loudnorm`, `drawtext`.
-Good default builds: **gyan.dev** (Windows), **evermeet.cx** (macOS), distro package (Linux).
+Good default builds: **gyan.dev** (Windows), distro package (Linux). Homebrew's `ffmpeg` 9 on macOS ships **without** `libass`/`freetype`, so captions are skipped there (with a warning) until you install a full build - e.g. a static build from evermeet.cx, or a tap that still bundles libass.
 `doctor` reports exactly which of these the installed build has.
 
 ## Voices
