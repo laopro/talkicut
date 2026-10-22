@@ -1,0 +1,35 @@
+{
+  "skill_name": "talkicut",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "acá tenés la grabación de pantalla de mi app (no tiene audio), sacale 3 o 4 clips verticales para reels con subtítulos",
+      "expected_output": "3-4 vertical 1080x1920 mp4 files, each with a burned caption track, an audio stream, and a written narration; plus the timestamps chosen and why",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "tengo este tutorial de 12 minutos en .mov, quiero shorts de menos de 30 segundos con voz en español",
+      "expected_output": "Clips honoring the 30s cap, Spanish TTS voice, captions, and a note on which beats were chosen",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "does this machine even have what it takes to render video? check before we start",
+      "expected_output": "Runs doctor, reports ffmpeg/filters/fonts/TTS availability with OS-specific install commands for anything missing",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "revisá la carpeta clips: decime si los videos quedaron bien o si algo está roto",
+      "expected_output": "Runs verify (or the equivalent ffprobe/volumedetect checks), reports per-file duration, resolution, audio presence and mean volume, names the broken clips and why",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "quiero los clips con un título grande los primeros segundos y subtítulos estilo tiktok",
+      "expected_output": "Adds a per-clip title and renders with --style tiktok, then shows a frame proving the hook and the captions are both on screen and not clipped",
+      "files": []
+    }
+  ]
+}

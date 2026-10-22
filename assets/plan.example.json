@@ -1,0 +1,37 @@
+{
+  "source": "demo.mp4",
+  "out": "clips",
+  "aspect": "9:16",
+  "lang": "es",
+  "voice": "es-AR-TomasNeural",
+  "audio": "tts",
+  "fit": "blur",
+  "captions_style": {
+    "preset": "tiktok",
+    "color": "#FFFFFF",
+    "outline_color": "#000000",
+    "max_words": 6
+  },
+  "clips": [
+    {
+      "name": "01-hook",
+      "start": 0.5,
+      "duration": 18,
+      "title": "Un prompt, un examen",
+      "script": "Así se arma un examen completo en menos de un minuto, desde un solo prompt."
+    },
+    {
+      "name": "02-configurar",
+      "start": 20,
+      "duration": 22,
+      "script": "Primero la clave de API: elegimos el proveedor, la pegamos y la guardamos. Sin eso no hay generación."
+    },
+    {
+      "name": "03-resultado",
+      "start": 96,
+      "duration": 30,
+      "script": "Y acá está el resultado: cada pregunta con sus opciones, una pista y la explicación de la respuesta correcta.",
+      "audio": "mix"
+    }
+  ]
+}
