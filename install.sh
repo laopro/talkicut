@@ -16,6 +16,7 @@ if [ -e "$dest" ]; then
 fi
 
 cp -R "$src" "$dest"
+rm -rf "$dest/.git"   # a copy is not a clone
 echo "talkicut installed in $dest"
 echo
 echo "check the machine:  python3 \"$dest/scripts/talkicut.py\" doctor"

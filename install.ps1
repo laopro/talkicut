@@ -13,6 +13,7 @@ if (Test-Path $dest) {
 }
 
 Copy-Item -Recurse -Path $src -Destination $dest
+Remove-Item -Recurse -Force (Join-Path $dest ".git") -ErrorAction SilentlyContinue   # a copy is not a clone
 Write-Host "talkicut installed in $dest"
 Write-Host ""
 Write-Host "check the machine:  python `"$dest\scripts\talkicut.py`" doctor"
