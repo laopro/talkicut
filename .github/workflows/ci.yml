@@ -26,7 +26,11 @@ jobs:
 
       - name: Install ffmpeg (macOS)
         if: runner.os == 'macOS'
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg || brew upgrade ffmpeg
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          "$(brew --prefix)/bin/ffmpeg" -hide_banner -version | head -1
+          "$(brew --prefix)/bin/ffmpeg" -hide_banner -filters | grep -E ' (ass|drawtext|boxblur|loudnorm) ' || true
 
       - name: Install ffmpeg (Windows)
         if: runner.os == 'Windows'
