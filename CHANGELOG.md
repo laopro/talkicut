@@ -8,7 +8,7 @@ Horizontal output and full-video edits, with a smaller token footprint.
 - `plan --full` + `stitch`: beats covering the whole video are joined into one file with stream copy, so a full edit costs a single encode.
 - `--stitch [name]`, `--brief` on `render`, `plan`, `verify` and `ocr`, `--max-sheets` on `sheet`.
 - `references/editing.md`: cut placement, beat length, narration for long edits, horizontal workflow.
-- `SKILL.md` halved: a short intake (three questions, defaults) and progressive disclosure into `references/`.
+- `SKILL.md` trimmed by a fifth: a short intake (three questions, defaults) and progressive disclosure into `references/`.
 - Skill description trimmed so it costs less context on every turn.
 
 ## 3.0.0
