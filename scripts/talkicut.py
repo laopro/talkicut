@@ -41,7 +41,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -663,6 +663,8 @@ def cmd_sheet(args):
     if not frames:
         print("no frames extracted (is the file a video?)", file=sys.stderr)
         return 1
+    if args.max_sheets > 0:
+        frames = frames[: args.max_sheets * per]   # token budget: fewer images to read
 
     sheets = []
     for i in range(0, len(frames), per):
@@ -716,6 +718,8 @@ def cmd_ocr(args):
     result = {"video": info, "frames": len(frames), "segments": chunks}
     if args.json:
         print(json.dumps(result, indent=2))
+    elif args.brief:
+        print(f"{len(frames)} frames, {len(chunks)} with text -> {args.out or 'stdout'}")
     else:
         for c in chunks:
             print(f"{c['time']:>7.1f}s  {c['text']}")
@@ -726,6 +730,20 @@ def cmd_ocr(args):
 
 
 ASPECTS = {"9:16": (1080, 1920), "1:1": (1080, 1080), "16:9": (1920, 1080), "4:5": (1080, 1350)}
+ASPECT_CHOICES = list(ASPECTS) + ["auto"]
+
+
+def resolve_aspect(aspect, info):
+    """`auto` keeps the recording's own orientation: landscape stays landscape."""
+    aspect = str(aspect or "9:16")
+    if aspect != "auto":
+        return aspect if aspect in ASPECTS else "9:16"
+    w, h = info.get("width") or 0, info.get("height") or 0
+    if not w or not h:
+        return "9:16"
+    if abs(w - h) <= h * 0.05:
+        return "1:1"
+    return "16:9" if w > h else "9:16"
 
 
 def cmd_plan(args):
@@ -769,12 +787,17 @@ def cmd_plan(args):
     except ValueError:      # different drives on Windows
         source_value = str(src)
 
-    plan = {"source": source_value, "aspect": args.aspect, "lang": args.lang,
-            "audio": "tts", "clips": clips}
+    plan = {"source": source_value, "aspect": args.aspect or ("auto" if args.full else "9:16"),
+            "lang": args.lang, "audio": "tts", "clips": clips}
+    if args.full:
+        plan["stitch"] = True
     out.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
 
     if args.json:
-        print(json.dumps({"plan": str(out), "clips": clips}, indent=2))
+        print(json.dumps({"plan": str(out), "clips": clips, "stitch": bool(args.full)}, indent=2))
+        return 0
+    if args.brief:
+        print(f"{out}: {len(clips)} beats" + (" -> stitched" if args.full else ""))
         return 0
     print(f"plan: {out}\n")
     for c in clips:
@@ -816,6 +839,9 @@ def cmd_verify(args):
 
     if args.json:
         print(json.dumps({"ok": problems_total == 0, "clips": rows}, indent=2))
+        return 0 if problems_total == 0 else 1
+    if args.brief:
+        print(f"{len(rows)} clips, {problems_total} problem(s)")
         return 0 if problems_total == 0 else 1
 
     print(f"{'file':<38} {'dur':>7} {'size':>11} {'dB':>7}  status")
@@ -877,7 +903,7 @@ def render_clip(clip, plan, opts, work: Path, index: int):
     if dur <= 0.2:
         return {"name": clip["name"], "ok": False, "error": "clip is outside the video"}
 
-    aspect = clip.get("aspect") or plan.get("aspect") or opts["aspect"]
+    aspect = resolve_aspect(clip.get("aspect") or plan.get("aspect") or opts["aspect"], info)
     width, height = ASPECTS.get(aspect, ASPECTS["9:16"])
     script = (clip.get("script") or clip.get("narration") or "").strip()
     lang = clip.get("lang") or plan.get("lang") or opts["lang"]
@@ -889,19 +915,24 @@ def render_clip(clip, plan, opts, work: Path, index: int):
 
     inputs = ["-ss", f"{start}", "-t", f"{dur}", "-i", plan["source"]]
 
-    # Three ways to fill a portrait frame from a landscape source. "blur" keeps every
-    # pixel (right for UI), "cover" crops for a fuller frame, "pad" uses a flat colour.
-    if fit == "cover":
-        vf = (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
-              f"crop={width}:{height}")
-    elif fit == "pad":
+    # If the source already has the target shape (16:9 video, 16:9 out) scale it
+    # straight: no blurred fill, no wasted encode.
+    src_ar = (info["width"] / info["height"]) if info.get("height") else 0
+    same_shape = src_ar and abs(src_ar - width / height) < 0.02
+
+    # Three ways to fill a frame of a different shape. "blur" keeps every pixel
+    # (right for UI), "cover" crops for a fuller frame, "pad" uses a flat colour.
+    if same_shape or fit == "pad":
         vf = (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
               f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x0E0E12")
+    elif fit == "cover":
+        vf = (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+              f"crop={width}:{height}")
     else:
         vf = (f"[0:v]split=2[bg][fg];"
               f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
               f"crop={width}:{height}")
-        if has_filter("boxblur") and aspect != "16:9":
+        if has_filter("boxblur"):
             vf += ",boxblur=18:2"
         vf += (f"[b];[fg]scale={width}:-2[f];[b][f]overlay=(W-w)/2:(H-h)/2")
 
@@ -991,6 +1022,34 @@ def render_clip(clip, plan, opts, work: Path, index: int):
             "script_chars": len(script)}
 
 
+def stitch_clips(clips, results, out_dir: Path, name: str):
+    """Join the rendered segments into one video, in plan order.
+
+    Segments come from the same encoder settings, so the concat demuxer can copy
+    the streams instead of re-encoding the whole timeline.
+    """
+    by_name = {r["name"]: r for r in results}
+    paths = []
+    for clip in clips:
+        r = by_name.get(clip["name"])
+        if not r or not r.get("ok") or not r.get("path") or not Path(r["path"]).exists():
+            return None, f"missing clip {clip['name']}"
+        paths.append(Path(r["path"]).resolve())
+
+    listing = out_dir / f".{name}.concat.txt"
+    listing.write_text("".join(f"file '{p.as_posix()}'\n" for p in paths), encoding="utf-8")
+    out = out_dir / f"{name}.mp4"
+    try:
+        code, _, err = run([FFMPEG, "-hide_banner", "-v", "error", "-y",
+                            "-f", "concat", "-safe", "0", "-i", str(listing),
+                            "-c", "copy", "-movflags", "+faststart", str(out)])
+    finally:
+        listing.unlink(missing_ok=True)
+    if code != 0 or not out.exists():
+        return None, err.strip()[:400]
+    return out, None
+
+
 def cmd_render(args):
     plan = load_plan(args.plan)
     info = probe_media(plan["source"])
@@ -1020,7 +1079,8 @@ def cmd_render(args):
 
     log = sys.stderr if args.json else sys.stdout
     print(f"source: {plan['source']} ({info['duration']:.1f}s, {info['width']}x{info['height']})", file=log)
-    print(f"out:    {out_dir}  ({len(clips)} clips, aspect {opts['aspect']})", file=log)
+    plan_aspect = resolve_aspect(plan.get("aspect") or opts["aspect"], info)
+    print(f"out:    {out_dir}  ({len(clips)} clips, aspect {plan_aspect})", file=log)
 
     if args.jobs > 1:
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -1034,7 +1094,7 @@ def cmd_render(args):
 
     manifest = {
         "tool": TOOL, "version": VERSION, "plan": plan.get("_path"),
-        "source": plan["source"], "aspect": opts["aspect"], "fit": opts["fit"],
+        "source": plan["source"], "aspect": plan_aspect, "fit": opts["fit"],
         "style": opts["captions_style"].get("preset"),
         "created": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
         "clips": results,
@@ -1049,11 +1109,33 @@ def cmd_render(args):
             manifest["clips"].sort(key=lambda c: c.get("name", ""))
         except (OSError, ValueError, TypeError):
             pass
+    stitch = args.stitch or plan.get("stitch")
+    if stitch and len(clips) == 1 and not args.only:
+        print("  - single clip: stitch skipped (the clip is the video)", file=sys.stderr)
+        stitch = None
+    if stitch and args.only:
+        print("  ! stitch skipped: --only renders a subset", file=sys.stderr)
+    elif stitch and not bad and not args.dry_run:
+        name = plan.get("stitch_name") or (stitch if isinstance(stitch, str) else "full")
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", str(name)).strip("-") or "full"
+        stitched, err = stitch_clips(clips, results, out_dir, name)
+        if stitched:
+            manifest["stitched"] = str(stitched)
+            print(f"stitched: {stitched}", file=log)
+        else:
+            print(f"  ! stitch failed: {err}", file=sys.stderr)
+            bad.append({"name": name, "error": err})
+
     if not args.dry_run:
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-
     if args.json:
-        print(json.dumps({"ok": not bad, "out_dir": str(out_dir), "clips": results}, indent=2))
+        print(json.dumps({"ok": not bad, "out_dir": str(out_dir), "clips": results,
+                          "stitched": manifest.get("stitched")}, indent=2))
+    elif args.brief:
+        line = f"{len(ok)}/{len(results)} clips -> {out_dir}"
+        if manifest.get("stitched"):
+            line += f"  (+ {Path(manifest['stitched']).name})"
+        print(line)
     else:
         for r in results:
             if r.get("ok"):
@@ -1111,7 +1193,8 @@ def cmd_selftest(args):
                             no_voiceover=args.no_voiceover, no_captions=False, audio="mix",
                             crf=24, preset="veryfast", fps=None, timeout=600, only=None,
                             jobs=1, json=False, keep_temp=False, fit="blur",
-                            dry_run=False, srt=True, thumbnail=True, style="tiktok")
+                            dry_run=False, srt=True, thumbnail=True, style="tiktok",
+                            stitch=None, brief=False)
     code = cmd_render(ns)
 
     checks = []
@@ -1169,9 +1252,13 @@ def main(argv=None):
     pl.add_argument("--start", type=float)
     pl.add_argument("--end", type=float)
     pl.add_argument("--out", help="defaults to <video>.plan.json")
-    pl.add_argument("--aspect", default="9:16", choices=list(ASPECTS))
+    pl.add_argument("--aspect", choices=ASPECT_CHOICES,
+                    help="default 9:16; 'auto' keeps the recording's orientation (16:9 stays 16:9)")
     pl.add_argument("--lang", default="es")
     pl.add_argument("--threshold", type=float, default=0.03)
+    pl.add_argument("--full", action="store_true",
+                    help="beats cover the whole video and render stitches them into one file")
+    pl.add_argument("--brief", action="store_true", help="one line of output")
     pl.add_argument("--json", action="store_true")
     pl.set_defaults(func=cmd_plan)
 
@@ -1182,6 +1269,8 @@ def main(argv=None):
     s.add_argument("--cols", type=int, default=5)
     s.add_argument("--rows", type=int, default=3)
     s.add_argument("--tile-width", type=int, default=384)
+    s.add_argument("--max-sheets", type=int, default=0,
+                   help="cap the number of sheets; fewer images to read")
     s.add_argument("--no-labels", action="store_true")
     s.add_argument("--keep-frames", action="store_true")
     s.add_argument("--json", action="store_true")
@@ -1195,12 +1284,14 @@ def main(argv=None):
                    help="fraction of frame height to OCR, centred")
     o.add_argument("--out")
     o.add_argument("--json", action="store_true")
+    o.add_argument("--brief", action="store_true")
     o.set_defaults(func=cmd_ocr)
 
     r = sub.add_parser("render", help="render clips from a plan.json")
     r.add_argument("plan")
     r.add_argument("--out")
-    r.add_argument("--aspect", default="9:16", choices=list(ASPECTS))
+    r.add_argument("--aspect", default="9:16", choices=ASPECT_CHOICES,
+                   help="9:16 shorts by default; 'auto' keeps the source orientation")
     r.add_argument("--voice", help="edge voice id or system voice name")
     r.add_argument("--lang", default="es", help="language code: es, en, pt, fr...")
     r.add_argument("--tts", default="auto", choices=["auto", "edge", "system", "none"])
@@ -1222,6 +1313,9 @@ def main(argv=None):
     r.add_argument("--srt", action="store_true", help="also write a .srt next to each clip")
     r.add_argument("--thumbnail", action="store_true", help="also write a .jpg cover per clip")
     r.add_argument("--dry-run", action="store_true", help="print the ffmpeg command, render nothing")
+    r.add_argument("--stitch", nargs="?", const="full", metavar="NAME",
+                   help="join all rendered clips into NAME.mp4 (plan: \"stitch\": true)")
+    r.add_argument("--brief", action="store_true", help="one line of output")
     r.add_argument("--keep-temp", action="store_true")
     r.add_argument("--json", action="store_true")
     r.set_defaults(func=cmd_render)
@@ -1231,6 +1325,7 @@ def main(argv=None):
     v.add_argument("--min-volume", type=float, default=-24.0, dest="min_volume")
     v.add_argument("--max-volume", type=float, default=-9.0, dest="max_volume")
     v.add_argument("--json", action="store_true")
+    v.add_argument("--brief", action="store_true")
     v.set_defaults(func=cmd_verify)
 
     t = sub.add_parser("selftest", help="render a synthetic video end to end")

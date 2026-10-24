@@ -51,7 +51,7 @@ The agent follows `SKILL.md`. By hand it is five commands:
 python scripts/talkicut.py doctor                  # what this machine has
 python scripts/talkicut.py probe demo.mp4          # duration, audio, scene cuts
 python scripts/talkicut.py sheet demo.mp4          # timestamped contact sheets
-python scripts/talkicut.py plan demo.mp4 --beats 4 # scaffold plan.json (empty scripts)
+python scripts/talkicut.py plan demo.mp4 --beats 4 # scaffold plan.json (--full to cover the whole video)
 python scripts/talkicut.py render plan.json        # -> ./clips
 python scripts/talkicut.py verify clips            # catch the silent failures
 ```
@@ -61,10 +61,12 @@ python scripts/talkicut.py verify clips            # catch the silent failures
 ## What you get
 
 - 1080x1920 (or 1:1, 4:5, 16:9), full screen visible over a blurred fill - no UI is cropped away
+- `--aspect auto` keeps a horizontal recording horizontal, scaled straight with no blur
 - burned captions in three presets (`clean`, `tiktok`, `bold`), word-synced when edge-tts is available
 - optional hook title for the first seconds of each clip
 - audio normalized to -16 LUFS, with a silent AAC track when there is no voice
 - `manifest.json`, plus optional `.srt` and `.jpg` per clip
+- `--stitch` joins the clips in plan order into one file: a full-video edit with the same encode
 - `+faststart` so platforms start processing the upload immediately
 
 ## Commands
@@ -80,7 +82,7 @@ python scripts/talkicut.py verify clips            # catch the silent failures
 | `verify` | every clip in a folder: streams, duration, size, mean volume |
 | `selftest` | synthetic end-to-end run, no user files touched |
 
-`render` flags: `--audio tts|source|mix`, `--tts auto|edge|system|none`, `--voice`, `--lang`, `--aspect`, `--fit blur|cover|pad`, `--style clean|tiktok|bold`, `--srt`, `--thumbnail`, `--dry-run`, `--only`, `--force`, `--jobs`, `--json`.
+`render` flags: `--audio tts|source|mix`, `--tts auto|edge|system|none`, `--voice`, `--lang`, `--aspect auto|9:16|4:5|1:1|16:9`, `--fit blur|cover|pad`, `--style clean|tiktok|bold`, `--stitch [name]`, `--srt`, `--thumbnail`, `--dry-run`, `--brief`, `--only`, `--force`, `--jobs`, `--json`.
 
 ## Why it works like this
 
@@ -92,6 +94,7 @@ python scripts/talkicut.py verify clips            # catch the silent failures
 ## Documentation
 
 - `SKILL.md` - the agent workflow, decisions and failure table
+- `references/editing.md` - full-video editing, horizontal output, stitching, pacing
 - `references/plan-schema.md` - every plan field and default
 - `references/narration.md` - pacing math, hooks, per-language notes
 - `references/platforms.md` - install matrix, voices per OS, known breakage
@@ -101,6 +104,7 @@ python scripts/talkicut.py verify clips            # catch the silent failures
 ## Limits
 
 - It does not choose highlights for you: no ASR and no virality model. Beat selection and narration are the judgment part.
+- A full edit is built from the beats you define; it does not detect silences or dead time automatically.
 - Captions are word-synced only with edge-tts; OS voices get proportional timing (good to ~0.3 s over a 30 s clip).
 - Face-tracking crops are out of scope - screen content should stay uncropped anyway.
 

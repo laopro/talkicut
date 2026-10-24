@@ -30,6 +30,18 @@
       "prompt": "quiero los clips con un título grande los primeros segundos y subtítulos estilo tiktok",
       "expected_output": "Adds a per-clip title and renders with --style tiktok, then shows a frame proving the hook and the captions are both on screen and not clipped",
       "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "esto es para youtube, no lo quiero vertical: dejalo horizontal y editame el video completo",
+      "expected_output": "Uses --aspect auto (or 16:9), plan --full with contiguous beats and stitch, renders one joined horizontal file, and verifies shape, audio and duration",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "no sé bien qué hacer con esta grabación, guiame",
+      "expected_output": "Asks at most three questions (destination, length, voice) with defaults, then proceeds without demanding timestamps or a transcript",
+      "files": []
     }
   ]
 }

@@ -11,6 +11,7 @@ Everything except `source` and `clips` is optional.
   "voice": "es-AR-TomasNeural",
   "audio": "tts",
   "fit": "blur",
+  "stitch": false,
   "captions_style": {"preset": "tiktok", "size": 58, "color": "#FFFFFF", "max_chars": 30},
   "clips": [
     {"name": "01-hook", "start": 0.5, "duration": 20, "title": "Mira esto", "script": "..."}
@@ -25,11 +26,13 @@ Everything except `source` and `clips` is optional.
 | `source` | string | required | Path to the video. Relative paths resolve **against the plan file's folder**, so a plan survives being moved between machines. |
 | `clips` | array | required | Non-empty. See below. |
 | `out` | string | `./clips` next to the plan | Output folder. `--out` wins over this. |
-| `aspect` | string | `9:16` | One of `9:16`, `1:1`, `4:5`, `16:9`. |
+| `aspect` | string | `9:16` | `9:16`, `1:1`, `4:5`, `16:9`, or `auto` (keep the recording's orientation: landscape stays landscape). |
 | `lang` | string | `es` | `es`, `en`, `pt`, `fr`, `de`, `it`, `ja`, `hi` pick good defaults for voice and offline TTS. CJK/Thai get shorter caption lines automatically. |
 | `voice` | string | language default | edge-tts voice id (`es-AR-TomasNeural`) or an OS voice name (`Microsoft Sabina Desktop`, `Mónica`, …). An empty string means "the sensible default for `lang`". |
 | `audio` | string | `tts` | `tts` = narration replaces original audio. `source` = keep original only **and skip narration even if a `script` exists** (captions still follow the script, proportionally timed). `mix` = original ducked to 22% under the narration. |
-| `fit` | string | `blur` | How the landscape source fills the frame: `blur` (blurred copy behind, keeps every pixel), `cover` (centre crop, loses edges), `pad` (flat bars). `--fit` sets it for the whole run. |
+| `fit` | string | `blur` | How the landscape source fills the frame: `blur` (blurred copy behind, keeps every pixel), `cover` (centre crop, loses edges), `pad` (flat bars). When the source already has the target shape, it is scaled straight and this is ignored. `--fit` sets it for the whole run. |
+| `stitch` | bool | `false` | Render all clips, then join them in plan order into one file. Same settings for every clip; `--only` skips stitching. `--stitch [name]` overrides it. |
+| `stitch_name` | string | `full` | Basename of the joined file. |
 | `captions_style` | object | see below | Preset plus typography overrides. |
 
 ## Clip fields
@@ -73,6 +76,7 @@ Everything except `source` and `clips` is optional.
 - **Every render writes `manifest.json`** next to the clips: tool version, plan path, source, aspect, fit, style, and one entry per clip with duration, size, audio, voice and captions.
 - **`--json`** prints `{"ok": bool, "out_dir": ..., "clips": [{name, path, duration, width, height, has_audio, voice, captions, title}]}` — parse it instead of scraping the human output.
 - **`--srt` and `--thumbnail`** write `<name>.srt` and `<name>.jpg` beside each clip, from the same grouped lines used for burn-in.
+- **`stitch`** joins clips with stream copy (same encoder settings everywhere), so a full-video edit costs one encode, not two. A failed clip aborts the join instead of producing a shorter video.
 
 ## Minimal plan
 
