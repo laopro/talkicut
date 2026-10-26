@@ -80,7 +80,7 @@ The agent researches the topic with its own web tools, writes the narration and 
 - audio normalized to -16 LUFS, with a silent AAC track when there is no voice
 - `manifest.json`, plus optional `.srt` and `.jpg` per clip
 - `--stitch` joins the clips in plan order into one file: a full-video edit with the same encode
-- prompt-only reels: Ken Burns motion over fetched stills, text-only beats on a dark canvas, and `credits.txt` with every image license
+- prompt-only reels: Ken Burns push + pan over fetched stills, crossfades, beats that last exactly as long as the narration, and `credits.txt` with every image license
 - `+faststart` so platforms start processing the upload immediately
 
 ## Commands
@@ -91,7 +91,7 @@ The agent researches the topic with its own web tools, writes the narration and 
 | `probe` | duration, resolution, audio, scene cuts, as text or `--json` |
 | `plan` | scaffolds `plan.json` with beats snapped to real cuts, and a character budget per beat |
 | `storyboard` | scaffolds a plan from a prompt, for videos with no source footage |
-| `fetch` | downloads freely licensed images for the plan's queries, plus attribution |
+| `fetch` | downloads freely licensed images for the plan's queries, plus attribution; `--sheet` writes a contact sheet to review them |
 | `sheet` | contact sheets with timestamps, for vision models |
 | `ocr` | timestamped UI transcript, for models without vision |
 | `render` | plan -> finished clips |
@@ -122,7 +122,7 @@ The agent researches the topic with its own web tools, writes the narration and 
 
 - It does not choose highlights for you: no ASR and no virality model. Beat selection and narration are the judgment part.
 - A full edit is built from the beats you define; it does not detect silences or dead time automatically.
-- Prompt-only videos use stills from Wikimedia Commons, not stock video, and the search matches words, not meaning: check the images before publishing.
+- Prompt-only videos use stills from Wikimedia Commons, not stock video. `fetch` ranks by title and photo-ness and `--sheet` shows every pick, but a wrong image is always possible: look at the sheet before publishing.
 - Captions are word-synced only with edge-tts; OS voices get proportional timing (good to ~0.3 s over a 30 s clip).
 - Face-tracking crops are out of scope - screen content should stay uncropped anyway.
 

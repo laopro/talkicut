@@ -48,9 +48,9 @@ credits: [
 | money | stock market trading floor |
 
 - English, 2–4 nouns. Add a qualifier when the subject is ambiguous (`Nvidia GPU`, `humanoid robot`).
-- `--n 2` gives the renderer two stills per beat (a slow pan each). Use `--n 1` for text-heavy beats.
+- `--n 2` gives the renderer two stills per beat (crossfaded). Use `--n 1` for text-heavy beats.
 - Abstract beats (a definition, a quote, a statistic) often work better with **no image**: leave `media` empty and the beat renders on a dark canvas with its title and captions.
-- Look at one downloaded thumbnail before rendering. Search results include diagrams, logos and unrelated photos; a wrong image is worse than a text-only beat.
+- `fetch --sheet` writes `media/sheet.jpg`, one grid of every chosen image in order. **Open it before rendering.** Search results include diagrams, logos and unrelated photos; a wrong image is worse than a text-only beat. To replace one, clear that clip's `media` and change its `query`, then fetch again.
 
 ## 4. Licensing and attribution
 
@@ -69,7 +69,9 @@ python scripts/talkicut.py render reel.plan.json --style tiktok --srt --thumbnai
 python scripts/talkicut.py verify clips --brief
 ```
 
-- No `source` means slideshow mode: each image gets `duration / len(media)` seconds, alternating zoom in/out at 30 fps, cropped to fill the frame.
+- No `source` means slideshow mode: each image gets a share of the beat, a 14% Ken Burns push with a directional pan, and a crossfade into the next still.
+- A slideshow beat lasts as long as its narration (+0.35 s), so captions and voice end together. `duration` in the plan is the maximum; the renderer shrinks the beat instead of leaving silence.
+- `fit: auto` (the default) fills the frame when the photo is already close to its shape and shows it whole over a blurred copy otherwise. Force `cover` for full-bleed or `blur` for every still.
 - `aspect: auto` on a slideshow follows the first image; set `9:16` or `16:9` explicitly when it matters.
 - Re-running `fetch` skips clips that already have `media`. Delete the entry (or the file) to re-fetch a bad image.
 - Check one frame per beat, not just the first: captions over a busy photo are the usual failure.

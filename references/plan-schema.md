@@ -30,7 +30,7 @@
 | `lang` | string | `es` | `es`, `en`, `pt`, `fr`, `de`, `it`, `ja`, `hi` pick good defaults for voice and offline TTS. CJK/Thai get shorter caption lines automatically. |
 | `voice` | string | language default | edge-tts voice id (`es-AR-TomasNeural`) or an OS voice name (`Microsoft Sabina Desktop`, `Mónica`, …). An empty string means "the sensible default for `lang`". |
 | `audio` | string | `tts` | `tts` = narration replaces original audio. `source` = keep original only **and skip narration even if a `script` exists** (captions still follow the script, proportionally timed). `mix` = original ducked to 22% under the narration. |
-| `fit` | string | `blur` | How the landscape source fills the frame: `blur` (blurred copy behind, keeps every pixel), `cover` (centre crop, loses edges), `pad` (flat bars). When the source already has the target shape, it is scaled straight and this is ignored. `--fit` sets it for the whole run. |
+| `fit` | string | `auto` | How the source fills the frame: `auto` (straight when the shapes match, `blur` otherwise; stills choose per image), `blur` (blurred copy behind, keeps every pixel), `cover` (centre crop, loses edges), `pad` (flat bars). `--fit` sets it for the whole run. |
 | `stitch` | bool | `false` | Render all clips, then join them in plan order into one file. Same settings for every clip; `--only` skips stitching. `--stitch [name]` overrides it. |
 | `stitch_name` | string | `full` | Basename of the joined file. |
 | `prompt` | string | `""` | The user's request, kept for reference when `storyboard` writes the plan. Ignored by `render`. |
@@ -43,7 +43,7 @@
 |---|---|---|---|
 | `name` | string | `clip-01` | Becomes the filename. Sanitized: unsafe characters stripped, spaces to dashes. |
 | `start` | number | `0` | Seconds into the source. |
-| `duration` | number | rest of video | Clamped to what is left of the source. Required (positive) on a slideshow. |
+| `duration` | number | rest of video | Clamped to what is left of the source. On a slideshow it is the maximum: the clip shrinks to the narration length so captions never end before the voice. |
 | `media` | array | `[]` | Image paths for a slideshow clip; relative paths resolve against the plan. Split evenly over `duration`, Ken Burns motion, cropped to fill. Empty = dark canvas with title and captions. |
 | `query` | string | `""` | Wikimedia Commons search used by `fetch` to fill `media`. Ignored by `render`. |
 | `script` | string | `""` | Narration. Empty = no voice, no captions, silent audio track. |
@@ -81,7 +81,7 @@
 - **`--json`** prints `{"ok": bool, "out_dir": ..., "clips": [{name, path, duration, width, height, has_audio, voice, captions, title}]}` — parse it instead of scraping the human output.
 - **`--srt` and `--thumbnail`** write `<name>.srt` and `<name>.jpg` beside each clip, from the same grouped lines used for burn-in.
 - **`stitch`** joins clips with stream copy (same encoder settings everywhere), so a full-video edit costs one encode, not two. A failed clip aborts the join instead of producing a shorter video.
-- **No `source` = slideshow.** Each clip's `media` images become a 30 fps Ken Burns clip, then go through the same TTS and caption path. `aspect: auto` follows the first image's orientation; set `9:16` or `16:9` when it matters.
+- **No `source` = slideshow.** Each clip's `media` images get a Ken Burns push, a pan and a crossfade, then go through the same TTS and caption path. The beat lasts as long as its voice, so there is no silence after the last caption. `aspect: auto` follows the first image; set `9:16` or `16:9` when it matters. `fit: auto` shows whole photos over a blurred copy and full-bleeds the ones that already match the frame.
 - **`fetch` edits the plan in place.** It fills `media` only for clips with a `query` and no images, appends attribution to `credits`, and writes `media/credits.txt`. Re-running skips filled clips, so a bad image is replaced by deleting its entry.
 - **`credits.txt`** lands in the output folder next to `manifest.json`; `manifest.credits` points to it.
 

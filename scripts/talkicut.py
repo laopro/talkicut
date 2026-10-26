@@ -43,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "3.2.0"
+VERSION = "3.2.1"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -825,7 +825,7 @@ def wiki_images(query, limit):
     params = {
         "action": "query", "generator": "search",
         "gsrsearch": f"filetype:bitmap {query}", "gsrnamespace": "6",
-        "gsrlimit": str(max(1, min(limit * 3, 30))),
+        "gsrlimit": str(max(4, min(limit * 6, 40))),
         "prop": "imageinfo", "iiprop": "url|extmetadata|size",
         "iiurlwidth": "1600", "format": "json", "formatversion": "2",
     }
@@ -848,8 +848,47 @@ def wiki_images(query, limit):
             "title": field("ObjectName") or page.get("title", "").removeprefix("File:"),
             "creator": field("Artist") or "unknown",
             "license": field("LicenseShortName") or "see source",
+            "w": ii.get("width") or 0, "h": ii.get("height") or 0,
         })
     return found
+
+
+def candidate_score(query, cand):
+    """Rank by what the file says about itself: words beat silence, photos beat diagrams."""
+    tokens = [w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) > 2]
+    text = f"{cand.get('title', '')}".lower()
+    score = sum(3 for t in tokens if t in text)
+    if cand.get("url", "").lower().split("?")[0].endswith((".jpg", ".jpeg")):
+        score += 2
+    bad = ("logo", "icon", "map", "diagram", "chart", "poster", "cover", "drawing",
+           "illustration", "screenshot", "coat of arms", "flag", "portrait", "sign")
+    score -= sum(4 for word in bad if word in text)
+    w, h = cand.get("w") or 0, cand.get("h") or 0
+    if w and h:
+        ar = w / h
+        if 1.15 <= ar <= 2.0:
+            score += 1          # landscape photos sit better in a video frame
+        if ar > 3 or ar < 0.5:
+            score -= 3
+    return score
+
+
+def make_sheet(paths, out, cell=360, cols=4):
+    """One contact sheet of the chosen stills, so a human or a model can veto them."""
+    paths = [Path(p) for p in paths][:12]
+    if not paths:
+        return None
+    rows = (len(paths) + cols - 1) // cols
+    inputs, chains = [], []
+    for i, p in enumerate(paths):
+        inputs += ["-i", str(p)]
+        chains.append(f"[{i}:v]scale={cell}:{cell}:force_original_aspect_ratio=decrease,"
+                      f"pad={cell}:{cell}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]")
+    graph = ";".join(chains) + ";" + "".join(f"[v{i}]" for i in range(len(paths))) + \
+        f"concat=n={len(paths)}:v=1:a=0,tile={cols}x{rows}:padding=6:margin=6[out]"
+    code, _, err = run([FFMPEG, "-hide_banner", "-v", "error", "-y", *inputs,
+                        "-filter_complex", graph, "-map", "[out]", "-frames:v", "1", str(out)])
+    return out if code == 0 else None
 
 
 def download_image(url, dest_dir: Path, stem: str):
@@ -895,6 +934,9 @@ def cmd_fetch(args):
             continue
         try:
             candidates = wiki_images(query, args.n)
+            candidates.sort(key=lambda c: candidate_score(query, c), reverse=True)
+            credits = [c for c in credits if c.get("clip") != clip.get("name")]
+            used = {(c.get("clip"), c.get("url")) for c in credits}
         except (OSError, ValueError) as exc:
             print(f"  ! {clip.get('name', i + 1)}: search failed ({exc})", file=sys.stderr)
             continue
@@ -927,6 +969,13 @@ def cmd_fetch(args):
                  f"{c.get('page') or c.get('url', '')}" for c in credits]
         (media_dir / "credits.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\n{filled} clip(s) with media, {len(credits)} credit(s) -> {media_dir}")
+    picked = [m for c in clips for m in (c.get("media") or [])]
+    if args.sheet and picked:
+        sheet = make_sheet(picked, media_dir / "sheet.jpg")
+        if sheet:
+            print(f"sheet: {sheet}")
+            for i, m in enumerate(picked[:12], 1):
+                print(f"  {i:>2}. {Path(m).name}")
     pending = [c for c in clips if str(c.get("query") or "").strip() and not c.get("media")]
     return 1 if pending else 0
 
@@ -1053,8 +1102,8 @@ def load_plan(path):
     return plan
 
 
-def build_broll(clip, width, height, dur, work: Path, index: int):
-    """Turn still images into a moving background: Ken Burns, no source video needed."""
+def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur"):
+    """Stills into motion: Ken Burns, crossfades, and a frame that keeps the subject whole."""
     media = [Path(p) for p in (clip.get("media") or []) if Path(p).exists()]
     out = work / f"broll-{index:02d}.mp4"
     fps = 30
@@ -1070,21 +1119,71 @@ def build_broll(clip, width, height, dur, work: Path, index: int):
             return None
         return out
 
-    per = dur / len(media)
-    frames = max(2, int(round(per * fps)))
+    n = len(media)
+    xf = round(min(0.5, dur / n * 0.3), 3) if n > 1 and has_filter("xfade") else 0.0
+    seg = round((dur + (n - 1) * xf) / n, 3)
+    frames = max(2, int(round(seg * fps)))
+    blur = ",boxblur=24:2" if has_filter("boxblur") else ""
+
+    def frame_mode(img):
+        """auto: fill the frame when the photo is already close to it, otherwise show it whole."""
+        if fit != "auto":
+            return fit
+        try:
+            dims = probe_media(img)
+            ar = dims["width"] / dims["height"] if dims["height"] else 0
+        except SystemExit:
+            ar = 0
+        return "cover" if ar and abs(ar - width / height) <= 0.22 * (width / height) else "blur"
+
     inputs, chains = [], []
     for i, img in enumerate(media):
-        inputs += ["-loop", "1", "-t", f"{per:.3f}", "-i", str(img)]
-        # alternate zoom in / zoom out so consecutive stills do not pulse
-        z = "min(zoom+0.0012,1.14)" if i % 2 == 0 else "if(eq(on,1),1.14,max(zoom-0.0012,1.0))"
+        inputs += ["-i", str(img)]
+        cover = frame_mode(img) == "cover"
+        zin = i % 2 == 0
+        z = f"1+0.14*on/{frames}" if zin else f"1.14-0.14*on/{frames}"
+        if i % 4 == 0:
+            px, py = f"(iw-iw/zoom)*on/{frames}", "(ih-ih/zoom)/2"
+        elif i % 4 == 1:
+            px, py = f"(iw-iw/zoom)*(1-on/{frames})", "(ih-ih/zoom)/2"
+        elif i % 4 == 2:
+            px, py = "(iw-iw/zoom)/2", f"(ih-ih/zoom)*on/{frames}"
+        else:
+            px, py = "(iw-iw/zoom)/2", f"(ih-ih/zoom)*(1-on/{frames})"
+
+        if cover:
+            cw = int(width * 1.16) // 2 * 2
+            ch = int(height * 1.16) // 2 * 2
+            base = (f"[{i}:v]scale={cw}:{ch}:force_original_aspect_ratio=increase,"
+                    f"crop={cw}:{ch}")
+        else:
+            cw = int(width * 1.1) // 2 * 2
+            ch = int(height * 1.1) // 2 * 2
+            fg_w, fg_h = int(cw * 0.94) // 2 * 2, int(ch * 0.94) // 2 * 2
+            base = (f"[{i}:v]split=2[bg{i}][fg{i}];"
+                    f"[bg{i}]scale={cw}:{ch}:force_original_aspect_ratio=increase,"
+                    f"crop={cw}:{ch}{blur}[b{i}];"
+                    f"[fg{i}]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[f{i}];"
+                    f"[b{i}][f{i}]overlay=(W-w)/2:(H-h)/2")
         chains.append(
-            f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
-            f"crop={width}:{height},"
-            f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            f"d={frames}:s={width}x{height}:fps={fps},setsar=1[v{i}]"
+            f"{base},zoompan=z='{z}':x='{px}':y='{py}':d={frames}:s={width}x{height}:"
+            f"fps={fps},setsar=1[v{i}]"
         )
-    graph = ";".join(chains + ["".join(f"[v{i}]" for i in range(len(media)))
-                              + f"concat=n={len(media)}:v=1:a=0[v]"])
+
+    if n > 1 and xf > 0:
+        parts = [f"[v0]"]
+        prev = "[v0]"
+        for i in range(1, n):
+            off = round(i * (seg - xf), 3)
+            parts.append(f"{prev}[v{i}]xfade=transition=fade:duration={xf}:offset={off}[x{i}]")
+            prev = f"[x{i}]"
+        graph = ";".join(chains + parts[1:]) + f";{prev}format=yuv420p[v]"
+    elif n > 1:
+        graph = ";".join(chains + ["".join(f"[v{i}]" for i in range(n))
+                                  + f"concat=n={n}:v=1:a=0,format=yuv420p[v]"])
+    else:
+        graph = chains[0] + ";[v0]format=yuv420p[v]"
+
     code, _, err = run([FFMPEG, "-hide_banner", "-v", "error", "-y", *inputs,
                         "-filter_complex", graph, "-map", "[v]", "-t", f"{dur}",
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -1119,15 +1218,34 @@ def render_clip(clip, plan, opts, work: Path, index: int):
         return {"name": clip["name"], "ok": True, "skipped": True, "path": str(out_path),
                 "duration": duration_of(out_path)}
 
+    audio_mode = clip.get("audio") or plan.get("audio") or opts["audio"]
+    # "source" means: the original audio is the sound of this clip, so no narration is generated
+    want_voice = bool(script) and opts["voiceover"] and audio_mode != "source"
+
+    speech = None
+    if want_voice:
+        try:
+            speech = make_speech(script, opts["tts"], clip.get("voice") or plan.get("voice") or opts["voice"],
+                                 lang, dur, work, f"tts-{index:02d}")
+            # a slideshow beat lasts as long as its voice: no dead air after the last caption
+            if not plan.get("source"):
+                dur = round(max(2.2, min(dur, speech.duration + 0.35)), 3)
+            print(f"  {clip['name']}: voice {speech.engine} {speech.duration:.1f}s / clip {dur:.1f}s",
+                  file=sys.stderr)
+        except TtsUnavailable as exc:
+            print(f"  ! {clip['name']}: no voice ({exc})", file=sys.stderr)
+
     src_path, src_start, src_info = plan["source"], start, info
     if not plan.get("source"):
-        broll = build_broll(clip, width, height, dur, work, index)
+        broll = build_broll(clip, width, height, dur, work, index, fit)
         if not broll:
             return {"name": clip["name"], "ok": False, "error": "b-roll build failed"}
         src_path, src_start = str(broll), 0.0
         src_info = {**info, "width": width, "height": height, "has_audio": False, "duration": dur}
 
     inputs = ["-ss", f"{src_start}", "-t", f"{dur}", "-i", src_path]
+    if speech:
+        inputs += ["-i", str(speech.audio)]
 
     # If the source already has the target shape (16:9 video, 16:9 out) scale it
     # straight: no blurred fill, no wasted encode.
@@ -1149,21 +1267,6 @@ def render_clip(clip, plan, opts, work: Path, index: int):
         if has_filter("boxblur"):
             vf += ",boxblur=18:2"
         vf += (f"[b];[fg]scale={width}:-2[f];[b][f]overlay=(W-w)/2:(H-h)/2")
-
-    audio_mode = clip.get("audio") or plan.get("audio") or opts["audio"]
-    # "source" means: the original audio is the sound of this clip, so no narration is generated
-    want_voice = bool(script) and opts["voiceover"] and audio_mode != "source"
-
-    speech = None
-    if want_voice:
-        try:
-            speech = make_speech(script, opts["tts"], clip.get("voice") or plan.get("voice") or opts["voice"],
-                                 lang, dur, work, f"tts-{index:02d}")
-            inputs += ["-i", str(speech.audio)]
-            print(f"  {clip['name']}: voice {speech.engine} {speech.duration:.1f}s / clip {dur:.1f}s",
-                  file=sys.stderr)
-        except TtsUnavailable as exc:
-            print(f"  ! {clip['name']}: no voice ({exc})", file=sys.stderr)
 
     style = resolve_style(clip.get("captions_style") or plan.get("captions_style") or
                           opts["captions_style"], width, height, lang)
@@ -1515,6 +1618,7 @@ def main(argv=None):
     fe.add_argument("plan")
     fe.add_argument("--n", type=int, default=2, help="images per clip")
     fe.add_argument("--out", default="media", help="folder next to the plan")
+    fe.add_argument("--sheet", action="store_true", help="write a contact sheet of the chosen images")
     fe.set_defaults(func=cmd_fetch)
 
     s = sub.add_parser("sheet", help="timestamped contact sheets")
@@ -1560,8 +1664,9 @@ def main(argv=None):
     r.add_argument("--preset", default="veryfast")
     r.add_argument("--style", choices=list(STYLE_PRESETS),
                    help="caption preset: clean, tiktok (above the UI), bold")
-    r.add_argument("--fit", choices=["blur", "cover", "pad"],
-                   help="how the landscape source fills the frame (default: blur, or the plan's fit)")
+    r.add_argument("--fit", choices=["auto", "blur", "cover", "pad"], default="auto",
+                   help="how the source fills the frame (default: auto - straight when the shape "
+                        "matches, blur otherwise; stills pick per image)")
     r.add_argument("--timeout", type=int, default=1800, help="per-clip ffmpeg timeout (s)")
     r.add_argument("--no-voiceover", action="store_true")
     r.add_argument("--no-captions", action="store_true")

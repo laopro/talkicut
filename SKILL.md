@@ -33,8 +33,8 @@ When the user gives a topic instead of a file ("usando talkicut haz un reel sobr
 1. **Research first** with your own web tools. Facts, numbers and dates come from sources, not from memory; keep the URLs for `credits`.
 2. `python scripts/talkicut.py storyboard "the prompt" --beats 5 --seconds 30 --out reel.plan.json` scaffolds beats with duration and character budget.
 3. Write each `script` (one idea per beat, 14–16 chars/s) and a literal English `query` for its image. Put the sources you used in the plan's `credits`.
-4. `python scripts/talkicut.py fetch reel.plan.json --n 2` downloads freely licensed images from Wikimedia Commons into `media/`, fills each clip's `media`, and writes attribution.
-5. `render` and `verify` as usual. `9:16` by default, `16:9` for YouTube, `auto` follows the first image.
+4. `python scripts/talkicut.py fetch reel.plan.json --n 2 --sheet` downloads freely licensed images from Wikimedia Commons into `media/`, fills each clip's `media`, writes attribution, and renders a contact sheet. **Look at `media/sheet.jpg`** and re-query any beat whose image is off-topic before rendering.
+5. `render` and `verify` as usual. `9:16` by default, `16:9` for YouTube, `auto` follows the first image. A slideshow beat lasts as long as its narration, so there is no dead air between caption and next beat.
 
 A beat with no image still works: it renders on a dark canvas with its title and captions. Research rules, query tips and licensing: `references/auto-video.md`.
 
@@ -145,8 +145,7 @@ Caption inside the frame, not colliding with UI text. `selftest` proves the pipe
 
 - `scripts/talkicut.py` — doctor, probe, plan, storyboard, fetch, sheet, ocr, render, verify, selftest. Only ffmpeg + Python 3.9+; `edge-tts` optional.
 - `references/auto-video.md` — prompt-only videos: research, image queries, licensing, text-only beats.
-- `references/editing.md` — full-video editing, horizontal output, stitching, pacing.
-- `references/plan-schema.md` — every field and default.
+- `references/editing.md` — full-video editing, horizontal output, stitching, pacing.- `references/plan-schema.md` — every field and default.
 - `references/narration.md` — pacing math, hooks, per-language notes.
 - `references/platforms.md` — install matrix, voices per OS, known breakage.
 - `references/ffmpeg-notes.md` — filter chains and the bugs behind them.

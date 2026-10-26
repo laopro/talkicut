@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.2.1
+
+Prompt-only videos that actually move, stay in sync, and show the subject.
+
+- Slideshow beats now last as long as their narration (+0.35 s): no more silence after the last caption, which read as subtitles drifting.
+- Ken Burns rewritten: `zoompan` gets a single frame per still, so the push and pan really animate; 14% zoom, four pan directions, crossfades between stills.
+- `fit: auto` for stills: full-bleed when the photo already matches the frame, whole image over a blurred copy otherwise. No more giant crops of vertical product shots.
+- `fetch` ranks candidates by title match, photo format and aspect, and penalises logos, diagrams, maps and charts.
+- `fetch --sheet` writes `media/sheet.jpg` with the chosen images in order, so the agent or the user can veto a bad pick before rendering.
+- Credits are deduplicated per clip when a clip is re-fetched, and entries without a `page` no longer crash.
+
 ## 3.2.0
 
 Videos from a prompt, with no footage at all.
