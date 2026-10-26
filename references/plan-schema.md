@@ -34,7 +34,7 @@
 | `stitch` | bool | `false` | Render all clips, then join them in plan order into one file. Same settings for every clip; `--only` skips stitching. `--stitch [name]` overrides it. |
 | `stitch_name` | string | `full` | Basename of the joined file. |
 | `prompt` | string | `""` | The user's request, kept for reference when `storyboard` writes the plan. Ignored by `render`. |
-| `music` | string | `""` | Audio track looped under the mix at 14%, faded in/out. Relative to the plan. `fetch --music "query"` fills it with a CC track. |
+| `music` | string | `""` | Audio track looped under the mix at 8%, faded in/out. Path relative to the plan, or a YouTube/SoundCloud URL downloaded with `yt-dlp`. |
 | `credits` | array | `[]` | Attribution entries `{title, creator, license, url, page, clip}`. `fetch` appends image licenses; `render` copies them to `credits.txt` in the output folder. |
 | `captions_style` | object | see below | Preset plus typography overrides. |
 

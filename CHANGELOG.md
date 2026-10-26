@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.3.1
+
+Better music, quieter.
+
+- `--music` and `fetch --music` accept a YouTube/NCS/SoundCloud URL or a search string; tracks come from `yt-dlp` (NCS and friends) and fall back to Wikimedia Commons when it is missing.
+- Default music level dropped to 8% under the voice: present, never fighting the narration.
+- NCS-style tracks get their title and page written to `credits.txt`, since the licence requires credit.
+
 ## 3.3.0
 
 Motion graphics and music, so a slideshow reel reads as an edit.

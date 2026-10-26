@@ -64,7 +64,7 @@ credits: [
 ```bash
 python scripts/talkicut.py storyboard "un reel sobre las IA actuales" --beats 4 --seconds 28 --out reel.plan.json
 # fill script + query + credits
-python scripts/talkicut.py fetch reel.plan.json --n 2 --sheet --music "electronic music loop"
+python scripts/talkicut.py fetch reel.plan.json --n 2 --sheet --music "Elektronomia Sky High NCS"
 python scripts/talkicut.py render reel.plan.json --style tiktok --srt --thumbnail
 python scripts/talkicut.py verify clips --brief
 ```
@@ -73,7 +73,7 @@ python scripts/talkicut.py verify clips --brief
 - A slideshow beat lasts as long as its narration (+0.35 s), so captions and voice end together. `duration` in the plan is the maximum; the renderer shrinks the beat instead of leaving silence.
 - `fit: auto` (the default) fills the frame when the photo is already close to its shape and shows it whole over a blurred copy otherwise. Force `cover` for full-bleed or `blur` for every still.
 - Motion comes from four layers: Ken Burns push + pan, crossfades (fade / slide / zoom / wipe), a 10 px progress bar, and captions/titles that fade and pop in.
-- `--music` loops a track under the voice at 14%, with a fade at both ends. `fetch --music "electronic music loop"` picks a CC track from Commons; check the title in `credits.txt`.
+- `--music` loops a track under the voice at 8%, with a fade at both ends. Pass a local file, a YouTube/NCS URL, or a search string: `fetch --music "NCS progressive house"` downloads the top hit with `yt-dlp` (falls back to Wikimedia Commons when yt-dlp is missing). Keep the credit in `credits.txt`; NCS requires it.
 - `aspect: auto` on a slideshow follows the first image; set `9:16` or `16:9` explicitly when it matters.
 - Re-running `fetch` skips clips that already have `media`. Delete the entry (or the file) to re-fetch a bad image.
 - Check one frame per beat, not just the first: captions over a busy photo are the usual failure.

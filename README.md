@@ -62,7 +62,7 @@ With no recording at all:
 
 ```bash
 python scripts/talkicut.py storyboard "un reel sobre las IA actuales" --beats 4 --seconds 28 --out reel.plan.json
-python scripts/talkicut.py fetch reel.plan.json --n 2 --music "electronic music loop"   # Wikimedia Commons -> media/ + credits.txt
+python scripts/talkicut.py fetch reel.plan.json --n 2 --music "NCS progressive house"   # Wikimedia Commons -> media/ + credits.txt
 python scripts/talkicut.py render reel.plan.json
 python scripts/talkicut.py verify clips
 ```
@@ -81,7 +81,7 @@ The agent researches the topic with its own web tools, writes the narration and 
 - `manifest.json`, plus optional `.srt` and `.jpg` per clip
 - `--stitch` joins the clips in plan order into one file: a full-video edit with the same encode
 - prompt-only reels: Ken Burns push + pan over fetched stills, four crossfade styles, a top progress bar, captions that fade and pop, beats that last exactly as long as the narration, and `credits.txt` with every image and music license
-- background music: `--music track.mp3` (or `fetch --music "query"` for a CC track) loops under the voice at 14%, faded in and out
+- background music: `--music track.mp3`, a YouTube/NCS URL, or `fetch --music "NCS progressive house"` (yt-dlp) loops under the voice at 8%, faded in and out
 - `+faststart` so platforms start processing the upload immediately
 
 ## Commands
@@ -92,14 +92,14 @@ The agent researches the topic with its own web tools, writes the narration and 
 | `probe` | duration, resolution, audio, scene cuts, as text or `--json` |
 | `plan` | scaffolds `plan.json` with beats snapped to real cuts, and a character budget per beat |
 | `storyboard` | scaffolds a plan from a prompt, for videos with no source footage |
-| `fetch` | downloads freely licensed images for the plan's queries, plus attribution; `--sheet` writes a contact sheet to review them, `--music "query"` adds a CC track |
+| `fetch` | downloads freely licensed images for the plan's queries, plus attribution; `--sheet` writes a contact sheet to review them, `--music "query"` adds a royalty-free track (yt-dlp, Commons fallback) |
 | `sheet` | contact sheets with timestamps, for vision models |
 | `ocr` | timestamped UI transcript, for models without vision |
 | `render` | plan -> finished clips |
 | `verify` | every clip in a folder: streams, duration, size, mean volume |
 | `selftest` | synthetic end-to-end run, no user files touched |
 
-`render` flags: `--audio tts|source|mix`, `--tts auto|edge|system|none`, `--voice`, `--lang`, `--aspect auto|9:16|4:5|1:1|16:9`, `--fit auto|blur|cover|pad`, `--style clean|tiktok|bold`, `--music track.mp3`, `--music-volume 0.14`, `--stitch [name]`, `--srt`, `--thumbnail`, `--dry-run`, `--brief`, `--only`, `--force`, `--jobs`, `--json`.
+`render` flags: `--audio tts|source|mix`, `--tts auto|edge|system|none`, `--voice`, `--lang`, `--aspect auto|9:16|4:5|1:1|16:9`, `--fit auto|blur|cover|pad`, `--style clean|tiktok|bold`, `--music file|url`, `--music-volume 0.08`, `--stitch [name]`, `--srt`, `--thumbnail`, `--dry-run`, `--brief`, `--only`, `--force`, `--jobs`, `--json`.
 
 ## Why it works like this
 

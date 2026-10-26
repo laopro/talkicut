@@ -43,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "3.3.0"
+VERSION = "3.3.1"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -1018,6 +1018,15 @@ def cmd_fetch(args):
 
     if args.music:
         try:
+            path, meta = yt_music(args.music, media_dir)
+            plan["music"] = str(path.relative_to(plan_path.parent)).replace("\\", "/")
+            credits = [c for c in credits if c.get("clip") != "music"]
+            credits.append({"clip": "music", "title": meta["title"],
+                            "creator": meta["creator"], "license": meta["license"],
+                            "url": meta["page"], "page": meta["page"]})
+            print(f"  music: {meta['title']} ({meta['creator']})")
+            tracks = None
+        except (OSError, ValueError):
             tracks = wiki_audio(args.music)
         except (OSError, ValueError) as exc:
             tracks = []
@@ -1034,7 +1043,7 @@ def cmd_fetch(args):
                 print(f"  music: {pick['title']} ({pick['license']}, {pick['duration']:.0f}s)")
             except (OSError, ValueError) as exc:
                 print(f"  ! music download failed ({exc})", file=sys.stderr)
-        else:
+        elif tracks is not None:
             print("  ! no usable music track found", file=sys.stderr)
 
     plan["credits"] = credits
@@ -1448,7 +1457,31 @@ def stitch_clips(clips, results, out_dir: Path, name: str):
     return out, None
 
 
-def add_music(video: Path, music: Path, volume=0.14):
+def yt_music(query_or_url, dest_dir: Path, stem="music"):
+    """Download one track with yt-dlp (NCS, YouTube, SoundCloud). Returns (path, meta)."""
+    if not shutil.which("yt-dlp"):
+        raise ValueError("yt-dlp not installed (pip install yt-dlp)")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target = query_or_url if query_or_url.startswith(("http://", "https://")) \
+        else f"ytsearch1:{query_or_url}"
+    code, out, err = run(["yt-dlp", "--no-playlist", "--print",
+                          "%(title)s\t%(uploader)s\t%(webpage_url)s", target])
+    if code != 0:
+        raise ValueError(err.strip()[:200] or "yt-dlp search failed")
+    title, uploader, page = (out.strip().split("\t") + ["", "", ""])[:3]
+    pattern = str(dest_dir / f"{stem}.%(ext)s")
+    code, _, err = run(["yt-dlp", "--no-playlist", "-x", "--audio-format", "mp3",
+                        "--audio-quality", "5", "-o", pattern, target])
+    if code != 0:
+        raise ValueError(err.strip()[:200] or "yt-dlp download failed")
+    found = sorted(dest_dir.glob(f"{stem}.*"))
+    if not found:
+        raise ValueError("yt-dlp wrote no file")
+    return found[0], {"title": title, "creator": uploader, "page": page,
+                      "license": "royalty-free (credit the artist / NCS)"}
+
+
+def add_music(video: Path, music: Path, volume=0.08):
     """Loop a track under the existing audio, fade it in and out. Video is copied, not re-encoded."""
     dur = duration_of(video)
     if dur <= 0.5:
@@ -1491,7 +1524,20 @@ def cmd_render(args):
     out_dir = Path(args.out or plan.get("out") or (Path(plan["_path"]).parent / "clips")).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     music = args.music or plan.get("music")
-    if music:
+    if music and music.startswith(("http://", "https://", "ytsearch")):
+        media_dir = Path(plan["_path"]).parent / "media"
+        cached = media_dir / "music.mp3"
+        if cached.exists():
+            music = str(cached)
+        else:
+            try:
+                path, meta = yt_music(music, media_dir)
+                music = str(path)
+                print(f"  music: {meta['title']} ({meta['creator']})")
+            except (OSError, ValueError) as exc:
+                print(f"  ! music download failed ({exc})", file=sys.stderr)
+                music = None
+    elif music:
         mp = Path(music).expanduser()
         if not mp.is_absolute():
             mp = Path(plan["_path"]).parent / mp
@@ -1663,7 +1709,7 @@ def cmd_selftest(args):
                             crf=24, preset="veryfast", fps=None, timeout=600, only=None,
                             jobs=1, json=False, keep_temp=False, fit="blur",
                             dry_run=False, srt=True, thumbnail=True, style="tiktok",
-                            stitch=None, brief=False, music=None, music_volume=0.14)
+                            stitch=None, brief=False, music=None, music_volume=0.08)
     code = cmd_render(ns)
 
     checks = []
@@ -1802,8 +1848,8 @@ def main(argv=None):
     r.add_argument("--thumbnail", action="store_true", help="also write a .jpg cover per clip")
     r.add_argument("--dry-run", action="store_true", help="print the ffmpeg command, render nothing")
     r.add_argument("--music", help="audio track to loop under the narration (path)")
-    r.add_argument("--music-volume", type=float, default=0.14,
-                   help="music level under the voice (default: 0.14)")
+    r.add_argument("--music-volume", type=float, default=0.08,
+                   help="music level under the voice (default: 0.08)")
     r.add_argument("--stitch", nargs="?", const="full", metavar="NAME",
                    help="join all rendered clips into NAME.mp4 (plan: \"stitch\": true)")
     r.add_argument("--brief", action="store_true", help="one line of output")
