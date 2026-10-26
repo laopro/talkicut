@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.2
+
+Less noise, fewer tokens.
+
+- Removed the top progress bar: it read as a watermark and clipped against platform UI.
+- `SKILL.md` rewritten from 152 to 77 lines (~9 KB to ~3.9 KB), with a hard "token budget" section: `--brief` first, one contact sheet, grep `ocr.json`, re-render with `--only`, and open references only when needed.
+
 ## 3.3.1
 
 Better music, quieter.

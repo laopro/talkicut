@@ -72,7 +72,7 @@ python scripts/talkicut.py verify clips --brief
 - No `source` means slideshow mode: each image gets a share of the beat, a 14% Ken Burns push with a directional pan, and a crossfade into the next still.
 - A slideshow beat lasts as long as its narration (+0.35 s), so captions and voice end together. `duration` in the plan is the maximum; the renderer shrinks the beat instead of leaving silence.
 - `fit: auto` (the default) fills the frame when the photo is already close to its shape and shows it whole over a blurred copy otherwise. Force `cover` for full-bleed or `blur` for every still.
-- Motion comes from four layers: Ken Burns push + pan, crossfades (fade / slide / zoom / wipe), a 10 px progress bar, and captions/titles that fade and pop in.
+- Motion comes from three layers: Ken Burns push + pan, crossfades (fade / slide / zoom / wipe), and captions/titles that fade and pop in.
 - `--music` loops a track under the voice at 8%, with a fade at both ends. Pass a local file, a YouTube/NCS URL, or a search string: `fetch --music "NCS progressive house"` downloads the top hit with `yt-dlp` (falls back to Wikimedia Commons when yt-dlp is missing). Keep the credit in `credits.txt`; NCS requires it.
 - `aspect: auto` on a slideshow follows the first image; set `9:16` or `16:9` explicitly when it matters.
 - Re-running `fetch` skips clips that already have `media`. Delete the entry (or the file) to re-fetch a bad image.

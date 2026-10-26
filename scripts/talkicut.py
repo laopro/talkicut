@@ -43,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "3.3.1"
+VERSION = "3.3.2"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -1368,10 +1368,6 @@ def render_clip(clip, plan, opts, work: Path, index: int):
         if opts["srt"] and lines:
             write_srt(lines, opts["out_dir"] / f"{clip['name']}.srt")
 
-    # a thin progress bar is the cheapest motion graphic that makes a slideshow feel edited
-    if not plan.get("source") and has_filter("drawbox") and dur > 0:
-        vf += (f",drawbox=x=0:y=0:w='iw*min(t/{dur},1)':h=10:"
-               f"color=0xFF3B5C@0.9:t=fill")
 
     vf += ",format=yuv420p"
 

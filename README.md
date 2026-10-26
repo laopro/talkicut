@@ -80,7 +80,7 @@ The agent researches the topic with its own web tools, writes the narration and 
 - audio normalized to -16 LUFS, with a silent AAC track when there is no voice
 - `manifest.json`, plus optional `.srt` and `.jpg` per clip
 - `--stitch` joins the clips in plan order into one file: a full-video edit with the same encode
-- prompt-only reels: Ken Burns push + pan over fetched stills, four crossfade styles, a top progress bar, captions that fade and pop, beats that last exactly as long as the narration, and `credits.txt` with every image and music license
+- prompt-only reels: Ken Burns push + pan over fetched stills, four crossfade styles, captions that fade and pop, beats that last exactly as long as the narration, and `credits.txt` with every image and music license
 - background music: `--music track.mp3`, a YouTube/NCS URL, or `fetch --music "NCS progressive house"` (yt-dlp) loops under the voice at 8%, faded in and out
 - `+faststart` so platforms start processing the upload immediately
 
