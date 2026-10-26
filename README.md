@@ -1,8 +1,10 @@
 # talkicut
 
-**Give a silent screen recording a voice, then cut it into vertical clips.**
+**Give a silent screen recording a voice, then cut it into vertical clips. Or describe a video and let it build one.**
 
 A screen recording with no audio track is the modern silent film: no transcript, nothing for an AI clipper to select. talkicut reads the recording, helps you choose the beats, writes nothing for you, speaks the narration you wrote, and burns word-synced captions into a 9:16 clip.
+
+No footage? Give it a topic. `storyboard` scaffolds the beats, `fetch` downloads freely licensed images from Wikimedia Commons, and `render` turns them into a moving, narrated video with attribution.
 
 Plain Python + ffmpeg. No API keys, no accounts, no cloud. Works on Windows, macOS and Linux, under any agent that can run a shell, with any model - including models that cannot see images.
 
@@ -56,6 +58,17 @@ python scripts/talkicut.py render plan.json        # -> ./clips
 python scripts/talkicut.py verify clips            # catch the silent failures
 ```
 
+With no recording at all:
+
+```bash
+python scripts/talkicut.py storyboard "un reel sobre las IA actuales" --beats 4 --seconds 28 --out reel.plan.json
+python scripts/talkicut.py fetch reel.plan.json --n 2   # Wikimedia Commons -> media/ + credits.txt
+python scripts/talkicut.py render reel.plan.json
+python scripts/talkicut.py verify clips
+```
+
+The agent researches the topic with its own web tools, writes the narration and one image query per beat, and cites its sources in `credits`. The pipeline does not invent facts.
+
 `selftest` renders a synthetic video end to end, so you can tell "my plan is wrong" apart from "this machine is broken".
 
 ## What you get
@@ -67,6 +80,7 @@ python scripts/talkicut.py verify clips            # catch the silent failures
 - audio normalized to -16 LUFS, with a silent AAC track when there is no voice
 - `manifest.json`, plus optional `.srt` and `.jpg` per clip
 - `--stitch` joins the clips in plan order into one file: a full-video edit with the same encode
+- prompt-only reels: Ken Burns motion over fetched stills, text-only beats on a dark canvas, and `credits.txt` with every image license
 - `+faststart` so platforms start processing the upload immediately
 
 ## Commands
@@ -76,6 +90,8 @@ python scripts/talkicut.py verify clips            # catch the silent failures
 | `doctor` | checks ffmpeg, filters, fonts and TTS backends, with install commands for your OS |
 | `probe` | duration, resolution, audio, scene cuts, as text or `--json` |
 | `plan` | scaffolds `plan.json` with beats snapped to real cuts, and a character budget per beat |
+| `storyboard` | scaffolds a plan from a prompt, for videos with no source footage |
+| `fetch` | downloads freely licensed images for the plan's queries, plus attribution |
 | `sheet` | contact sheets with timestamps, for vision models |
 | `ocr` | timestamped UI transcript, for models without vision |
 | `render` | plan -> finished clips |
@@ -95,6 +111,7 @@ python scripts/talkicut.py verify clips            # catch the silent failures
 
 - `SKILL.md` - the agent workflow, decisions and failure table
 - `references/editing.md` - full-video editing, horizontal output, stitching, pacing
+- `references/auto-video.md` - prompt-only videos: research, image queries, licensing, text-only beats
 - `references/plan-schema.md` - every plan field and default
 - `references/narration.md` - pacing math, hooks, per-language notes
 - `references/platforms.md` - install matrix, voices per OS, known breakage
@@ -105,6 +122,7 @@ python scripts/talkicut.py verify clips            # catch the silent failures
 
 - It does not choose highlights for you: no ASR and no virality model. Beat selection and narration are the judgment part.
 - A full edit is built from the beats you define; it does not detect silences or dead time automatically.
+- Prompt-only videos use stills from Wikimedia Commons, not stock video, and the search matches words, not meaning: check the images before publishing.
 - Captions are word-synced only with edge-tts; OS voices get proportional timing (good to ~0.3 s over a 30 s clip).
 - Face-tracking crops are out of scope - screen content should stay uncropped anyway.
 

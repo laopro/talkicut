@@ -37,11 +37,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -808,6 +810,148 @@ def cmd_plan(args):
     return 0
 
 
+WIKI_API = "https://commons.wikimedia.org/w/api.php"
+HTTP_UA = f"{TOOL}/{VERSION} (+https://github.com/laopro/talkicut)"
+
+
+def http_json(url, timeout=25):
+    req = urllib.request.Request(url, headers={"User-Agent": HTTP_UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def wiki_images(query, limit):
+    """Search Wikimedia Commons for freely licensed stills. No key, no account."""
+    params = {
+        "action": "query", "generator": "search",
+        "gsrsearch": f"filetype:bitmap {query}", "gsrnamespace": "6",
+        "gsrlimit": str(max(1, min(limit * 3, 30))),
+        "prop": "imageinfo", "iiprop": "url|extmetadata|size",
+        "iiurlwidth": "1600", "format": "json", "formatversion": "2",
+    }
+    data = http_json(f"{WIKI_API}?{urllib.parse.urlencode(params)}")
+    found = []
+    for page in data.get("query", {}).get("pages", []):
+        ii = (page.get("imageinfo") or [{}])[0]
+        url = ii.get("thumburl") or ii.get("url")
+        if not url:
+            continue
+        if (ii.get("width") or 0) and ii["width"] < 800:
+            continue
+        meta = ii.get("extmetadata") or {}
+
+        def field(key):
+            return re.sub(r"<[^>]+>", "", str((meta.get(key) or {}).get("value") or "")).strip()
+
+        found.append({
+            "url": url, "page": ii.get("descriptionurl") or "",
+            "title": field("ObjectName") or page.get("title", "").removeprefix("File:"),
+            "creator": field("Artist") or "unknown",
+            "license": field("LicenseShortName") or "see source",
+        })
+    return found
+
+
+def download_image(url, dest_dir: Path, stem: str):
+    """Download one image, keeping an extension ffmpeg can trust from the magic bytes."""
+    req = urllib.request.Request(url, headers={"User-Agent": HTTP_UA})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = resp.read(15_000_000)
+    if len(data) < 8_000:
+        raise ValueError("file too small")
+    if data[:3] == b"\xff\xd8\xff":
+        ext = ".jpg"
+    elif data[:8] == b"\x89PNG\r\n\x1a\n":
+        ext = ".png"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        ext = ".webp"
+    elif data[:4] == b"GIF8":
+        ext = ".gif"
+    else:
+        ext = ".jpg"
+    dest = dest_dir / f"{stem}{ext}"
+    dest.write_bytes(data)
+    return dest
+
+
+def cmd_fetch(args):
+    """Fill a plan's image slots from Wikimedia Commons, with attribution."""
+    plan_path = Path(args.plan).expanduser().resolve()
+    if not plan_path.exists():
+        raise SystemExit(f"plan not found: {plan_path}")
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    clips = plan.get("clips") or []
+    if not clips:
+        raise SystemExit("plan has no clips")
+    media_dir = (plan_path.parent / args.out).resolve()
+    media_dir.mkdir(parents=True, exist_ok=True)
+    credits = plan.get("credits") or []
+    used = {(c.get("clip"), c.get("url")) for c in credits}
+
+    filled = 0
+    for i, clip in enumerate(clips):
+        query = str(clip.get("query") or "").strip()
+        if not query or clip.get("media"):
+            continue
+        try:
+            candidates = wiki_images(query, args.n)
+        except (OSError, ValueError) as exc:
+            print(f"  ! {clip.get('name', i + 1)}: search failed ({exc})", file=sys.stderr)
+            continue
+        got = []
+        for j, cand in enumerate(candidates[: args.n]):
+            try:
+                path = download_image(cand["url"], media_dir,
+                                      f"{clip.get('name', f'clip-{i + 1:02d}')}-{j + 1}")
+            except (OSError, ValueError) as exc:
+                print(f"  ! {clip.get('name')}: download failed ({exc})", file=sys.stderr)
+                continue
+            got.append(str(path.relative_to(plan_path.parent)).replace("\\", "/"))
+            key = (clip.get("name"), cand["url"])
+            if key not in used:
+                credits.append({"clip": clip.get("name"), "title": cand["title"],
+                                "creator": cand["creator"], "license": cand["license"],
+                                "url": cand["url"], "page": cand["page"]})
+                used.add(key)
+        if got:
+            clip["media"] = got
+            filled += 1
+            print(f"  {clip.get('name')}: {len(got)} image(s) for \"{query}\"")
+        else:
+            print(f"  ! {clip.get('name')}: nothing usable for \"{query}\"", file=sys.stderr)
+
+    plan["credits"] = credits
+    plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+    if credits:
+        lines = [f"{c['title']} — {c['creator']} — {c['license']} — {c['page'] or c['url']}"
+                 for c in credits]
+        (media_dir / "credits.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\n{filled} clip(s) with media, {len(credits)} credit(s) -> {media_dir}")
+    pending = [c for c in clips if str(c.get("query") or "").strip() and not c.get("media")]
+    return 1 if pending else 0
+
+
+def cmd_storyboard(args):
+    """Scaffold a plan for a video that has no source footage: beats + image queries."""
+    beats = max(1, args.beats)
+    total = max(2.0, args.seconds)
+    dur = round(total / beats, 2)
+    clips = [{"name": f"{i + 1:02d}-beat", "duration": dur, "title": "",
+              "script": "", "query": ""} for i in range(beats)]
+    plan = {"prompt": args.prompt, "aspect": args.aspect, "lang": args.lang,
+            "audio": "tts", "clips": clips}
+    out = Path(args.out).expanduser() if args.out else Path("reel.plan.json")
+    out.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+    if args.json:
+        print(json.dumps({"plan": str(out), "clips": clips}, indent=2))
+        return 0
+    print(f"plan: {out}\n")
+    for c in clips:
+        print(f"  {c['name']:<10} {c['duration']:>5.1f}s   script ~{int(c['duration'] * 15 * 0.85)} chars")
+    print(f"\nfill script + query per beat, then: talkicut fetch {out.name} && talkicut render {out.name}")
+    return 0
+
+
 def cmd_verify(args):
     """Catch the silent failures: no audio track, wrong size, silent or clipped audio."""
     root = Path(args.dir).expanduser()
@@ -860,16 +1004,25 @@ def load_plan(path):
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
     # source paths are relative to the plan file: plans stay portable between machines
-    src = Path(plan.get("source", "")).expanduser()
-    if not src.is_absolute():
-        src = plan_path.parent / src
-    if not src.exists():
-        raise SystemExit(f"source video not found: {src}")
-    plan["source"] = str(src.resolve())
+    src_value = plan.get("source")
+    if src_value:
+        src = Path(src_value).expanduser()
+        if not src.is_absolute():
+            src = plan_path.parent / src
+        if not src.exists():
+            raise SystemExit(f"source video not found: {src}")
+        plan["source"] = str(src.resolve())
+    else:
+        # no source: a slideshow plan built from fetched images
+        plan["source"] = None
 
     clips = plan.get("clips")
     if not isinstance(clips, list) or not clips:
         raise SystemExit("plan needs a non-empty 'clips' array")
+    if not plan["source"] and not any(
+            isinstance(c, dict) and (c.get("media") or c.get("query") or c.get("script") or c.get("title"))
+            for c in clips):
+        raise SystemExit("plan needs a 'source' video, or clips with 'media'/'query'/'script'")
     seen = {}
     for i, clip in enumerate(clips):
         if not isinstance(clip, dict):
@@ -890,8 +1043,56 @@ def load_plan(path):
                     clip[key] = float(clip[key])
                 except (TypeError, ValueError):
                     raise SystemExit(f"clip '{clip['name']}': {key} must be a number")
+        media = clip.get("media")
+        if isinstance(media, str):
+            media = [media]
+        if media:
+            clip["media"] = [str((plan_path.parent / str(m)).resolve() if not Path(str(m)).is_absolute()
+                                 else Path(str(m))) for m in media]
     plan["_path"] = str(plan_path)
     return plan
+
+
+def build_broll(clip, width, height, dur, work: Path, index: int):
+    """Turn still images into a moving background: Ken Burns, no source video needed."""
+    media = [Path(p) for p in (clip.get("media") or []) if Path(p).exists()]
+    out = work / f"broll-{index:02d}.mp4"
+    fps = 30
+    if not media:
+        # a beat without an image is still a beat: dark canvas, captions carry it
+        cmd = [FFMPEG, "-hide_banner", "-v", "error", "-y", "-f", "lavfi",
+               "-i", f"color=c=0x111318:s={width}x{height}:r={fps}:d={dur}",
+               "-t", f"{dur}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+               "-pix_fmt", "yuv420p", str(out)]
+        code, _, err = run(cmd, cwd=work)
+        if code != 0:
+            print(f"  ! {clip['name']}: could not build the canvas: {err.strip()[:300]}", file=sys.stderr)
+            return None
+        return out
+
+    per = dur / len(media)
+    frames = max(2, int(round(per * fps)))
+    inputs, chains = [], []
+    for i, img in enumerate(media):
+        inputs += ["-loop", "1", "-t", f"{per:.3f}", "-i", str(img)]
+        # alternate zoom in / zoom out so consecutive stills do not pulse
+        z = "min(zoom+0.0012,1.14)" if i % 2 == 0 else "if(eq(on,1),1.14,max(zoom-0.0012,1.0))"
+        chains.append(
+            f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},"
+            f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"d={frames}:s={width}x{height}:fps={fps},setsar=1[v{i}]"
+        )
+    graph = ";".join(chains + ["".join(f"[v{i}]" for i in range(len(media)))
+                              + f"concat=n={len(media)}:v=1:a=0[v]"])
+    code, _, err = run([FFMPEG, "-hide_banner", "-v", "error", "-y", *inputs,
+                        "-filter_complex", graph, "-map", "[v]", "-t", f"{dur}",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                        "-pix_fmt", "yuv420p", "-r", str(fps), str(out)], cwd=work)
+    if code != 0:
+        print(f"  ! {clip['name']}: could not build b-roll: {err.strip()[:300]}", file=sys.stderr)
+        return None
+    return out
 
 
 def render_clip(clip, plan, opts, work: Path, index: int):
@@ -899,9 +1100,14 @@ def render_clip(clip, plan, opts, work: Path, index: int):
     src_dur = info["duration"]
     start = max(0.0, float(clip.get("start") or 0))
     dur = float(clip.get("duration") or 0) or (src_dur - start)
-    dur = round(min(dur, src_dur - start), 3)
+    if plan.get("source"):
+        dur = round(min(dur, src_dur - start), 3)
+    else:
+        dur = round(dur, 3)
     if dur <= 0.2:
-        return {"name": clip["name"], "ok": False, "error": "clip is outside the video"}
+        return {"name": clip["name"], "ok": False,
+                "error": "clip needs a positive duration" if not plan.get("source")
+                         else "clip is outside the video"}
 
     aspect = resolve_aspect(clip.get("aspect") or plan.get("aspect") or opts["aspect"], info)
     width, height = ASPECTS.get(aspect, ASPECTS["9:16"])
@@ -913,11 +1119,19 @@ def render_clip(clip, plan, opts, work: Path, index: int):
         return {"name": clip["name"], "ok": True, "skipped": True, "path": str(out_path),
                 "duration": duration_of(out_path)}
 
-    inputs = ["-ss", f"{start}", "-t", f"{dur}", "-i", plan["source"]]
+    src_path, src_start, src_info = plan["source"], start, info
+    if not plan.get("source"):
+        broll = build_broll(clip, width, height, dur, work, index)
+        if not broll:
+            return {"name": clip["name"], "ok": False, "error": "b-roll build failed"}
+        src_path, src_start = str(broll), 0.0
+        src_info = {**info, "width": width, "height": height, "has_audio": False, "duration": dur}
+
+    inputs = ["-ss", f"{src_start}", "-t", f"{dur}", "-i", src_path]
 
     # If the source already has the target shape (16:9 video, 16:9 out) scale it
     # straight: no blurred fill, no wasted encode.
-    src_ar = (info["width"] / info["height"]) if info.get("height") else 0
+    src_ar = (src_info["width"] / src_info["height"]) if src_info.get("height") else 0
     same_shape = src_ar and abs(src_ar - width / height) < 0.02
 
     # Three ways to fill a frame of a different shape. "blur" keeps every pixel
@@ -971,20 +1185,20 @@ def render_clip(clip, plan, opts, work: Path, index: int):
     maps, filters = [], []
     if speech:
         maps = ["-map", "0:v", "-map", "1:a"]
-    elif audio_mode in ("source", "mix") and info["has_audio"]:
+    elif audio_mode in ("source", "mix") and src_info["has_audio"]:
         maps = ["-map", "0:v", "-map", "0:a"]
     else:
         inputs += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
         maps = ["-map", "0:v", "-map", str(sum(1 for x in inputs if x == "-i") - 1)]
 
     # audio graph: tts alone, source alone, or source ducked under the narration
-    if speech and audio_mode == "mix" and info["has_audio"]:
+    if speech and audio_mode == "mix" and src_info["has_audio"]:
         filters.append("[0:a]volume=0.22[bgm]")
         filters.append("[1:a]loudnorm=I=-16:TP=-1.5:LRA=11[vo]")
         filters.append("[bgm][vo]amix=inputs=2:duration=longest:normalize=0[aout]")
     elif speech:
         filters.append("[1:a]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
-    elif audio_mode in ("source", "mix") and info["has_audio"]:
+    elif audio_mode in ("source", "mix") and src_info["has_audio"]:
         filters.append("[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
     else:
         filters.append(f"[{int(maps[-1])}:a]aformat=sample_rates=48000:channel_layouts=stereo[aout]")
@@ -1052,7 +1266,21 @@ def stitch_clips(clips, results, out_dir: Path, name: str):
 
 def cmd_render(args):
     plan = load_plan(args.plan)
-    info = probe_media(plan["source"])
+    if plan.get("source"):
+        info = probe_media(plan["source"])
+    else:
+        info = {"path": None, "duration": 0.0, "width": 0, "height": 0, "fps": 0.0,
+                "video_codec": None, "has_audio": False, "audio_codec": None,
+                "audio_channels": 0, "sample_rate": 0}
+        # `aspect: auto` on a slideshow follows the first image's orientation
+        first_media = next((m for c in plan["clips"] for m in (c.get("media") or [])
+                            if Path(m).exists()), None)
+        if first_media:
+            try:
+                dims = probe_media(first_media)
+                info["width"], info["height"] = dims["width"], dims["height"]
+            except SystemExit:
+                pass
     out_dir = Path(args.out or plan.get("out") or (Path(plan["_path"]).parent / "clips")).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="tc-render-"))
@@ -1078,7 +1306,11 @@ def cmd_render(args):
                              f"{', '.join(c['name'] for c in plan['clips'])}")
 
     log = sys.stderr if args.json else sys.stdout
-    print(f"source: {plan['source']} ({info['duration']:.1f}s, {info['width']}x{info['height']})", file=log)
+    if plan.get("source"):
+        print(f"source: {plan['source']} ({info['duration']:.1f}s, "
+              f"{info['width']}x{info['height']})", file=log)
+    else:
+        print(f"source: slideshow ({len(clips)} beats, images only)", file=log)
     plan_aspect = resolve_aspect(plan.get("aspect") or opts["aspect"], info)
     print(f"out:    {out_dir}  ({len(clips)} clips, aspect {plan_aspect})", file=log)
 
@@ -1125,6 +1357,13 @@ def cmd_render(args):
         else:
             print(f"  ! stitch failed: {err}", file=sys.stderr)
             bad.append({"name": name, "error": err})
+
+    credits = plan.get("credits") or []
+    if credits and not args.dry_run:
+        lines = [f"{c.get('title', '')} - {c.get('creator', '')} ({c.get('license', '')}) "
+                 f"{c.get('page') or c.get('url', '')}" for c in credits]
+        (out_dir / "credits.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        manifest["credits"] = "credits.txt"
 
     if not args.dry_run:
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -1261,6 +1500,22 @@ def main(argv=None):
     pl.add_argument("--brief", action="store_true", help="one line of output")
     pl.add_argument("--json", action="store_true")
     pl.set_defaults(func=cmd_plan)
+
+    sb = sub.add_parser("storyboard", help="scaffold a plan for a prompt-only video (no footage)")
+    sb.add_argument("prompt")
+    sb.add_argument("--beats", type=int, default=5)
+    sb.add_argument("--seconds", type=float, default=30)
+    sb.add_argument("--aspect", default="9:16", choices=ASPECT_CHOICES)
+    sb.add_argument("--lang", default="es")
+    sb.add_argument("--out")
+    sb.add_argument("--json", action="store_true")
+    sb.set_defaults(func=cmd_storyboard)
+
+    fe = sub.add_parser("fetch", help="download freely licensed images for a plan's queries")
+    fe.add_argument("plan")
+    fe.add_argument("--n", type=int, default=2, help="images per clip")
+    fe.add_argument("--out", default="media", help="folder next to the plan")
+    fe.set_defaults(func=cmd_fetch)
 
     s = sub.add_parser("sheet", help="timestamped contact sheets")
     s.add_argument("video")

@@ -42,6 +42,12 @@
       "prompt": "no sé bien qué hacer con esta grabación, guiame",
       "expected_output": "Asks at most three questions (destination, length, voice) with defaults, then proceeds without demanding timestamps or a transcript",
       "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "usando talkicut hacé un reel sobre las IA actuales",
+      "expected_output": "Researches the topic, writes 3-6 beats with narration and English image queries, runs storyboard + fetch + render + verify, delivers a 9:16 mp4 with voice, captions and a credits.txt citing sources and image licenses, without inventing facts",
+      "files": []
     }
   ]
 }

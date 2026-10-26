@@ -1,6 +1,6 @@
 ---
 name: talkicut
-description: Turn screen recordings, tutorials, demos and webinars - silent ones included - into short clips or one fully edited video, with TTS narration and burned captions. Use for vertical shorts, horizontal edits, voiceover, subtitles, or when SupoClip/OpusClip finds nothing because the source has no audio. Triggers: screen recording, grabación de pantalla, tutorial, demo, clip, subtítulos, ponerle voz, sin audio, editar el video completo, reels, shorts, 9:16, 16:9, talkicut.
+description: Turn screen recordings, tutorials, demos and webinars - silent ones included - into short clips or one fully edited video, with TTS narration and burned captions. Also builds a video from a prompt alone, fetching freely licensed images when there is no footage. Use for vertical shorts, horizontal edits, voiceover, subtitles, reels, or when SupoClip/OpusClip finds nothing. Triggers: screen recording, grabación de pantalla, tutorial, demo, clip, subtítulos, ponerle voz, sin audio, editar el video completo, haz un video sobre, reels, shorts, 9:16, 16:9, talkicut.
 ---
 
 # talkicut
@@ -16,6 +16,7 @@ Works on Windows, macOS and Linux, under any agent that can run a shell, with an
 | Shorts / reels / TikTok / "clips" | 2–5 clips, 15–35 s each, `--aspect 9:16` (default) |
 | A horizontal video, YouTube, a course | one clip or in-order segments, `--aspect auto` (keeps 16:9) |
 | "Edit the whole video" | beats covering the full recording + `"stitch": true` → one file |
+| No footage, just a topic | `storyboard` → research → `fetch` → `render` (next section) |
 
 If it is not obvious, ask **at most three questions** and offer defaults so the user can answer with one word:
 
@@ -24,6 +25,18 @@ If it is not obvious, ask **at most three questions** and offer defaults so the 
 3. "¿Voz en español neutro/rioplatense, o preferís sin voz y solo cortes?" (default: the voice for their language)
 
 Do not ask for timestamps, transcript or scene list: that is your job, from `probe` and `sheet`.
+
+## From a prompt, no footage
+
+When the user gives a topic instead of a file ("usando talkicut haz un reel sobre las IA actuales"):
+
+1. **Research first** with your own web tools. Facts, numbers and dates come from sources, not from memory; keep the URLs for `credits`.
+2. `python scripts/talkicut.py storyboard "the prompt" --beats 5 --seconds 30 --out reel.plan.json` scaffolds beats with duration and character budget.
+3. Write each `script` (one idea per beat, 14–16 chars/s) and a literal English `query` for its image. Put the sources you used in the plan's `credits`.
+4. `python scripts/talkicut.py fetch reel.plan.json --n 2` downloads freely licensed images from Wikimedia Commons into `media/`, fills each clip's `media`, and writes attribution.
+5. `render` and `verify` as usual. `9:16` by default, `16:9` for YouTube, `auto` follows the first image.
+
+A beat with no image still works: it renders on a dark canvas with its title and captions. Research rules, query tips and licensing: `references/auto-video.md`.
 
 ## 0. Check the machine (once)
 
@@ -113,6 +126,7 @@ Caption inside the frame, not colliding with UI text. `selftest` proves the pipe
 - `render --brief` and `verify --brief` print one line each; `--json` only when you need fields.
 - Never re-read a rendered frame unless the user asks: the manifest already says duration, size, audio and captions per clip.
 - Keep the plan in one file and edit it; do not regenerate clips you did not change (`--only name --force`).
+- Prompt-only: `fetch --n 1` unless a beat needs variety; `storyboard` already prints the character budget, do not recount it.
 
 ## When something is missing
 
@@ -124,10 +138,13 @@ Caption inside the frame, not colliding with UI text. `selftest` proves the pipe
 | Voice does not fit | the script is too long: cut words, not tempo (+35% is the limit). |
 | Stitch fails | render all clips in one run; `--only` cannot stitch a subset. |
 | 4K/60 footage | `--preset faster --crf 23`; keep libx264, hardware encoders are not worth the breakage. |
+| `fetch` finds nothing | the query is too abstract: use concrete English nouns ("data center servers", not "the future of AI"), or make the beat text-only. |
+| A fetched image is off-topic | Wikimedia matches words, not meaning: look at the thumbnail, then rewrite the query or drop the image. |
 
 ## Files
 
-- `scripts/talkicut.py` — doctor, probe, plan, sheet, ocr, render, verify, selftest. Only ffmpeg + Python 3.9+; `edge-tts` optional.
+- `scripts/talkicut.py` — doctor, probe, plan, storyboard, fetch, sheet, ocr, render, verify, selftest. Only ffmpeg + Python 3.9+; `edge-tts` optional.
+- `references/auto-video.md` — prompt-only videos: research, image queries, licensing, text-only beats.
 - `references/editing.md` — full-video editing, horizontal output, stitching, pacing.
 - `references/plan-schema.md` — every field and default.
 - `references/narration.md` — pacing math, hooks, per-language notes.

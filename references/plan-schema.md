@@ -1,6 +1,6 @@
 # plan.json schema
 
-Everything except `source` and `clips` is optional.
+`clips` is required. `source` is required unless the clips bring their own `media`, `query` or `script`: then the plan renders as a slideshow, with no source video.
 
 ```json
 {
@@ -23,7 +23,7 @@ Everything except `source` and `clips` is optional.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `source` | string | required | Path to the video. Relative paths resolve **against the plan file's folder**, so a plan survives being moved between machines. |
+| `source` | string | required for footage plans | Path to the video. Relative paths resolve **against the plan file's folder**, so a plan survives being moved between machines. Omit it for a slideshow. |
 | `clips` | array | required | Non-empty. See below. |
 | `out` | string | `./clips` next to the plan | Output folder. `--out` wins over this. |
 | `aspect` | string | `9:16` | `9:16`, `1:1`, `4:5`, `16:9`, or `auto` (keep the recording's orientation: landscape stays landscape). |
@@ -33,6 +33,8 @@ Everything except `source` and `clips` is optional.
 | `fit` | string | `blur` | How the landscape source fills the frame: `blur` (blurred copy behind, keeps every pixel), `cover` (centre crop, loses edges), `pad` (flat bars). When the source already has the target shape, it is scaled straight and this is ignored. `--fit` sets it for the whole run. |
 | `stitch` | bool | `false` | Render all clips, then join them in plan order into one file. Same settings for every clip; `--only` skips stitching. `--stitch [name]` overrides it. |
 | `stitch_name` | string | `full` | Basename of the joined file. |
+| `prompt` | string | `""` | The user's request, kept for reference when `storyboard` writes the plan. Ignored by `render`. |
+| `credits` | array | `[]` | Attribution entries `{title, creator, license, url, page, clip}`. `fetch` appends image licenses; `render` copies them to `credits.txt` in the output folder. |
 | `captions_style` | object | see below | Preset plus typography overrides. |
 
 ## Clip fields
@@ -41,7 +43,9 @@ Everything except `source` and `clips` is optional.
 |---|---|---|---|
 | `name` | string | `clip-01` | Becomes the filename. Sanitized: unsafe characters stripped, spaces to dashes. |
 | `start` | number | `0` | Seconds into the source. |
-| `duration` | number | rest of video | Clamped to what is left of the source. |
+| `duration` | number | rest of video | Clamped to what is left of the source. Required (positive) on a slideshow. |
+| `media` | array | `[]` | Image paths for a slideshow clip; relative paths resolve against the plan. Split evenly over `duration`, Ken Burns motion, cropped to fill. Empty = dark canvas with title and captions. |
+| `query` | string | `""` | Wikimedia Commons search used by `fetch` to fill `media`. Ignored by `render`. |
 | `script` | string | `""` | Narration. Empty = no voice, no captions, silent audio track. |
 | `narration` | string | — | Alias for `script`. |
 | `voice` | string | plan value | Override the voice for one clip (useful when quoting someone else). |
@@ -77,9 +81,20 @@ Everything except `source` and `clips` is optional.
 - **`--json`** prints `{"ok": bool, "out_dir": ..., "clips": [{name, path, duration, width, height, has_audio, voice, captions, title}]}` — parse it instead of scraping the human output.
 - **`--srt` and `--thumbnail`** write `<name>.srt` and `<name>.jpg` beside each clip, from the same grouped lines used for burn-in.
 - **`stitch`** joins clips with stream copy (same encoder settings everywhere), so a full-video edit costs one encode, not two. A failed clip aborts the join instead of producing a shorter video.
+- **No `source` = slideshow.** Each clip's `media` images become a 30 fps Ken Burns clip, then go through the same TTS and caption path. `aspect: auto` follows the first image's orientation; set `9:16` or `16:9` when it matters.
+- **`fetch` edits the plan in place.** It fills `media` only for clips with a `query` and no images, appends attribution to `credits`, and writes `media/credits.txt`. Re-running skips filled clips, so a bad image is replaced by deleting its entry.
+- **`credits.txt`** lands in the output folder next to `manifest.json`; `manifest.credits` points to it.
 
 ## Minimal plan
 
 ```json
 {"source": "screen.mov", "clips": [{"name": "hook", "start": 4, "duration": 12, "script": "Mira esto."}]}
+```
+
+A prompt-only plan, before and after `fetch`:
+
+```json
+{"aspect": "9:16", "clips": [
+  {"name": "01-hook", "duration": 6, "script": "La IA ya no es ciencia ficción.", "query": "artificial intelligence robot"}
+]}
 ```

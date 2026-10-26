@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.2.0
+
+Videos from a prompt, with no footage at all.
+
+- `storyboard "prompt"` scaffolds a source-less plan with beats, durations and a character budget.
+- `fetch plan.json` downloads freely licensed images from Wikimedia Commons for each clip's `query`, fills `media`, and writes `media/credits.txt` with attribution.
+- Render accepts plans without `source`: images become Ken Burns clips (alternating zoom, 30 fps, cropped to fill) and reuse the existing TTS, captions, title and audio pipeline.
+- A beat with no image renders on a dark canvas with its title and captions, so statistics and quotes need no stock photo.
+- `aspect: auto` on a slideshow follows the first image's orientation.
+- `credits.txt` is copied to the output folder and linked from `manifest.json`.
+- `references/auto-video.md`: research rules, beat lengths, Wikimedia query writing, licensing and attribution.
+- `SKILL.md`: prompt-only workflow section and two new failure-table rows.
+
 ## 3.1.0
 
 Horizontal output and full-video edits, with a smaller token footprint.
