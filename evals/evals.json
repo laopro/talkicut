@@ -48,6 +48,12 @@
       "prompt": "usando talkicut hacé un reel sobre las IA actuales",
       "expected_output": "Researches the topic, writes 3-6 beats with narration and English image queries, runs storyboard + fetch + render + verify, delivers a 9:16 mp4 with voice, captions and a credits.txt citing sources and image licenses, without inventing facts",
       "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "hacé un reel sobre la RAM y ponele música y animaciones",
+      "expected_output": "Runs storyboard + fetch with --music, renders with --stitch and a music track, verifies the mp4 has audio, and mentions the track's license from credits.txt",
+      "files": []
     }
   ]
 }

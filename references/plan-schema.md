@@ -34,6 +34,7 @@
 | `stitch` | bool | `false` | Render all clips, then join them in plan order into one file. Same settings for every clip; `--only` skips stitching. `--stitch [name]` overrides it. |
 | `stitch_name` | string | `full` | Basename of the joined file. |
 | `prompt` | string | `""` | The user's request, kept for reference when `storyboard` writes the plan. Ignored by `render`. |
+| `music` | string | `""` | Audio track looped under the mix at 14%, faded in/out. Relative to the plan. `fetch --music "query"` fills it with a CC track. |
 | `credits` | array | `[]` | Attribution entries `{title, creator, license, url, page, clip}`. `fetch` appends image licenses; `render` copies them to `credits.txt` in the output folder. |
 | `captions_style` | object | see below | Preset plus typography overrides. |
 
@@ -84,6 +85,7 @@
 - **No `source` = slideshow.** Each clip's `media` images get a Ken Burns push, a pan and a crossfade, then go through the same TTS and caption path. The beat lasts as long as its voice, so there is no silence after the last caption. `aspect: auto` follows the first image; set `9:16` or `16:9` when it matters. `fit: auto` shows whole photos over a blurred copy and full-bleeds the ones that already match the frame.
 - **`fetch` edits the plan in place.** It fills `media` only for clips with a `query` and no images, appends attribution to `credits`, and writes `media/credits.txt`. Re-running skips filled clips, so a bad image is replaced by deleting its entry.
 - **`credits.txt`** lands in the output folder next to `manifest.json`; `manifest.credits` points to it.
+- **Music** is applied after stitching, so the track runs once over the whole video instead of restarting at every beat. Without `stitch`, each rendered clip gets its own copy.
 
 ## Minimal plan
 

@@ -43,7 +43,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "3.2.1"
+VERSION = "3.3.0"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -442,8 +442,8 @@ def build_ass(lines, path, width, height, style, title=None, dur=None):
     if title:
         title_end = min(3.2, (dur or 3.2) * 0.4)
         safe = str(title).replace("{", "(").replace("}", ")")
-        body.append(f"Dialogue: 0,0:00:00.00,{ts(title_end)},Title,,0,0,0,,"
-                    f"{{\\fad(180,220)}}{safe}")
+        body.append(f"Dialogue: 0,0:00:00.00,{ts(title_end)},Title,,0,0,0,," 
+                    f"{{\\fad(180,220)\\t(0,320,\\fscx106\\fscy106)}}{safe}")
     for i, line in enumerate(lines):
         start = line[0][0]
         natural_end = line[-1][0] + line[-1][1] + 0.12
@@ -453,7 +453,7 @@ def build_ass(lines, path, width, height, style, title=None, dur=None):
         end = max(natural_end, start + 0.25)
         text = " ".join(c[2] for c in line).replace("\n", " ")
         text = text.replace("{", "(").replace("}", ")")  # braces are ASS override syntax
-        body.append(f"Dialogue: 0,{ts(start)},{ts(end)},Cap,,0,0,0,,{text}")
+        body.append(f"Dialogue: 0,{ts(start)},{ts(end)},Cap,,0,0,0,,{{\\fad(70,70)}}{text}")
 
     if len(body) > 1:
         times = [ln[0][0] for ln in lines]
@@ -913,6 +913,60 @@ def download_image(url, dest_dir: Path, stem: str):
     return dest
 
 
+AUDIO_EXTS = (".mp3", ".ogg", ".oga", ".opus", ".wav", ".flac", ".m4a")
+
+
+def wiki_audio(query, limit=6):
+    """Search Wikimedia Commons for a freely licensed music track (no key)."""
+    params = {
+        "action": "query", "generator": "search",
+        "gsrsearch": f"filetype:audio {query}", "gsrnamespace": "6",
+        "gsrlimit": str(min(limit * 3, 20)), "prop": "imageinfo",
+        "iiprop": "url|size|extmetadata", "format": "json", "formatversion": "2",
+    }
+    data = http_json(f"{WIKI_API}?{urllib.parse.urlencode(params)}")
+    found = []
+    for page in data.get("query", {}).get("pages", []):
+        ii = (page.get("imageinfo") or [{}])[0]
+        url = ii.get("url") or ""
+        ext = Path(urllib.parse.urlparse(url).path).suffix.lower()
+        dur = float(ii.get("duration") or 0)
+        if not url or ext not in AUDIO_EXTS or dur < 12 or dur > 600:
+            continue
+        if (ii.get("size") or 0) > 30_000_000:
+            continue
+        meta = ii.get("extmetadata") or {}
+
+        def field(key):
+            return re.sub(r"<[^>]+>", "", str((meta.get(key) or {}).get("value") or "")).strip()
+
+        license_name = field("LicenseShortName")
+        title = field("ObjectName") or page.get("title", "").removeprefix("File:")
+        score = 3 if license_name.lower() in ("cc0", "public domain") else 1
+        score -= 1 if dur > 360 else 0
+        score += sum(2 for token in re.findall(r"[a-z]+", query.lower())
+                     if token in page.get("title", "").lower())
+        found.append({"url": url, "page": ii.get("descriptionurl") or "", "title": title,
+                      "creator": field("Artist") or "unknown",
+                      "license": license_name or "see source", "duration": dur, "score": score})
+    found.sort(key=lambda c: c["score"], reverse=True)
+    return found
+
+
+def download_audio(url, dest_dir: Path, stem: str):
+    req = urllib.request.Request(url, headers={"User-Agent": HTTP_UA})
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        data = resp.read(40_000_000)
+    if len(data) < 20_000:
+        raise ValueError("file too small")
+    ext = Path(urllib.parse.urlparse(url).path).suffix.lower()
+    if ext not in AUDIO_EXTS:
+        ext = ".mp3"
+    dest = dest_dir / f"{stem}{ext}"
+    dest.write_bytes(data)
+    return dest
+
+
 def cmd_fetch(args):
     """Fill a plan's image slots from Wikimedia Commons, with attribution."""
     plan_path = Path(args.plan).expanduser().resolve()
@@ -961,6 +1015,27 @@ def cmd_fetch(args):
             print(f"  {clip.get('name')}: {len(got)} image(s) for \"{query}\"")
         else:
             print(f"  ! {clip.get('name')}: nothing usable for \"{query}\"", file=sys.stderr)
+
+    if args.music:
+        try:
+            tracks = wiki_audio(args.music)
+        except (OSError, ValueError) as exc:
+            tracks = []
+            print(f"  ! music search failed ({exc})", file=sys.stderr)
+        if tracks:
+            pick = tracks[0]
+            try:
+                path = download_audio(pick["url"], media_dir, "music")
+                plan["music"] = str(path.relative_to(plan_path.parent)).replace("\\", "/")
+                credits = [c for c in credits if c.get("clip") != "music"]
+                credits.append({"clip": "music", "title": pick["title"],
+                                "creator": pick["creator"], "license": pick["license"],
+                                "url": pick["url"], "page": pick["page"]})
+                print(f"  music: {pick['title']} ({pick['license']}, {pick['duration']:.0f}s)")
+            except (OSError, ValueError) as exc:
+                print(f"  ! music download failed ({exc})", file=sys.stderr)
+        else:
+            print("  ! no usable music track found", file=sys.stderr)
 
     plan["credits"] = credits
     plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -1175,7 +1250,8 @@ def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur"):
         prev = "[v0]"
         for i in range(1, n):
             off = round(i * (seg - xf), 3)
-            parts.append(f"{prev}[v{i}]xfade=transition=fade:duration={xf}:offset={off}[x{i}]")
+            trans = ("fade", "slideleft", "zoomin", "wipeup")[(i - 1) % 4]
+            parts.append(f"{prev}[v{i}]xfade=transition={trans}:duration={xf}:offset={off}[x{i}]")
             prev = f"[x{i}]"
         graph = ";".join(chains + parts[1:]) + f";{prev}format=yuv420p[v]"
     elif n > 1:
@@ -1283,6 +1359,11 @@ def render_clip(clip, plan, opts, work: Path, index: int):
         if opts["srt"] and lines:
             write_srt(lines, opts["out_dir"] / f"{clip['name']}.srt")
 
+    # a thin progress bar is the cheapest motion graphic that makes a slideshow feel edited
+    if not plan.get("source") and has_filter("drawbox") and dur > 0:
+        vf += (f",drawbox=x=0:y=0:w='iw*min(t/{dur},1)':h=10:"
+               f"color=0xFF3B5C@0.9:t=fill")
+
     vf += ",format=yuv420p"
 
     maps, filters = [], []
@@ -1367,6 +1448,29 @@ def stitch_clips(clips, results, out_dir: Path, name: str):
     return out, None
 
 
+def add_music(video: Path, music: Path, volume=0.14):
+    """Loop a track under the existing audio, fade it in and out. Video is copied, not re-encoded."""
+    dur = duration_of(video)
+    if dur <= 0.5:
+        return False
+    tmp = video.with_name(video.stem + ".music" + video.suffix)
+    fade_out = max(0.0, dur - 1.6)
+    graph = (f"[1:a]volume={volume},afade=t=in:st=0:d=0.7,"
+             f"afade=t=out:st={fade_out:.2f}:d=1.6[m];"
+             f"[0:a][m]amix=inputs=2:duration=first:normalize=0[a]")
+    code, _, err = run([FFMPEG, "-hide_banner", "-v", "error", "-y", "-i", str(video),
+                        "-stream_loop", "-1", "-i", str(music), "-filter_complex", graph,
+                        "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
+                        "-b:a", "192k", "-movflags", "+faststart", "-shortest", str(tmp)])
+    if code != 0:
+        print(f"  ! music failed on {video.name}: {err.strip()[:200]}", file=sys.stderr)
+        if tmp.exists():
+            tmp.unlink()
+        return False
+    os.replace(tmp, video)
+    return True
+
+
 def cmd_render(args):
     plan = load_plan(args.plan)
     if plan.get("source"):
@@ -1386,6 +1490,16 @@ def cmd_render(args):
                 pass
     out_dir = Path(args.out or plan.get("out") or (Path(plan["_path"]).parent / "clips")).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    music = args.music or plan.get("music")
+    if music:
+        mp = Path(music).expanduser()
+        if not mp.is_absolute():
+            mp = Path(plan["_path"]).parent / mp
+        if mp.exists():
+            music = str(mp.resolve())
+        else:
+            print(f"  ! music not found: {mp}", file=sys.stderr)
+            music = None
     work = Path(tempfile.mkdtemp(prefix="tc-render-"))
     plan_style = dict(plan.get("captions_style") or {})
     plan_style["preset"] = args.style or plan_style.get("preset") or "clean"
@@ -1397,7 +1511,7 @@ def cmd_render(args):
         "captions_style": plan_style,
         "audio": plan.get("audio") or args.audio, "crf": args.crf, "preset": args.preset,
         "fps": args.fps, "timeout": args.timeout,
-        "fit": args.fit or plan.get("fit") or "blur", "dry_run": args.dry_run,
+        "fit": args.fit or plan.get("fit") or "auto", "dry_run": args.dry_run,
         "srt": args.srt, "thumbnail": args.thumbnail,
     }
     clips = plan["clips"]
@@ -1460,6 +1574,19 @@ def cmd_render(args):
         else:
             print(f"  ! stitch failed: {err}", file=sys.stderr)
             bad.append({"name": name, "error": err})
+
+    if music and not args.dry_run:
+        targets = []
+        if manifest.get("stitched"):
+            targets = [Path(manifest["stitched"])]
+        else:
+            targets = [Path(r["path"]) for r in results
+                       if r.get("ok") and not r.get("skipped") and r.get("path")]
+        for target in targets:
+            if add_music(target, Path(music), args.music_volume):
+                manifest["music"] = str(Path(music))
+        if manifest.get("music"):
+            print(f"music: {Path(music).name}", file=log)
 
     credits = plan.get("credits") or []
     if credits and not args.dry_run:
@@ -1536,7 +1663,7 @@ def cmd_selftest(args):
                             crf=24, preset="veryfast", fps=None, timeout=600, only=None,
                             jobs=1, json=False, keep_temp=False, fit="blur",
                             dry_run=False, srt=True, thumbnail=True, style="tiktok",
-                            stitch=None, brief=False)
+                            stitch=None, brief=False, music=None, music_volume=0.14)
     code = cmd_render(ns)
 
     checks = []
@@ -1619,6 +1746,7 @@ def main(argv=None):
     fe.add_argument("--n", type=int, default=2, help="images per clip")
     fe.add_argument("--out", default="media", help="folder next to the plan")
     fe.add_argument("--sheet", action="store_true", help="write a contact sheet of the chosen images")
+    fe.add_argument("--music", metavar="QUERY", help="also fetch a freely licensed music track")
     fe.set_defaults(func=cmd_fetch)
 
     s = sub.add_parser("sheet", help="timestamped contact sheets")
@@ -1664,7 +1792,7 @@ def main(argv=None):
     r.add_argument("--preset", default="veryfast")
     r.add_argument("--style", choices=list(STYLE_PRESETS),
                    help="caption preset: clean, tiktok (above the UI), bold")
-    r.add_argument("--fit", choices=["auto", "blur", "cover", "pad"], default="auto",
+    r.add_argument("--fit", choices=["auto", "blur", "cover", "pad"], default=None,
                    help="how the source fills the frame (default: auto - straight when the shape "
                         "matches, blur otherwise; stills pick per image)")
     r.add_argument("--timeout", type=int, default=1800, help="per-clip ffmpeg timeout (s)")
@@ -1673,6 +1801,9 @@ def main(argv=None):
     r.add_argument("--srt", action="store_true", help="also write a .srt next to each clip")
     r.add_argument("--thumbnail", action="store_true", help="also write a .jpg cover per clip")
     r.add_argument("--dry-run", action="store_true", help="print the ffmpeg command, render nothing")
+    r.add_argument("--music", help="audio track to loop under the narration (path)")
+    r.add_argument("--music-volume", type=float, default=0.14,
+                   help="music level under the voice (default: 0.14)")
     r.add_argument("--stitch", nargs="?", const="full", metavar="NAME",
                    help="join all rendered clips into NAME.mp4 (plan: \"stitch\": true)")
     r.add_argument("--brief", action="store_true", help="one line of output")

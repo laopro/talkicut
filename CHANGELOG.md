@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.3.0
+
+Motion graphics and music, so a slideshow reel reads as an edit.
+
+- `--music track.mp3` loops a track under the narration at 14% (`--music-volume`), with a fade in and out. It is applied after stitching, so the music runs once over the whole video instead of restarting at every beat.
+- `fetch --music "electronic music loop"` picks a freely licensed track from Wikimedia Commons (12-600 s, <= 30 MB, CC0/BY preferred), saves it as `media/music.*`, sets `plan.music` and adds it to `credits.txt`.
+- A thin progress bar runs across the top of every slideshow clip.
+- Titles pop in with a scale + fade; captions fade instead of snapping on.
+- Crossfades now cycle through fade, slide, zoom and wipe instead of using fade for every junction.
+
 ## 3.2.1
 
 Prompt-only videos that actually move, stay in sync, and show the subject.

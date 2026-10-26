@@ -33,7 +33,7 @@ When the user gives a topic instead of a file ("usando talkicut haz un reel sobr
 1. **Research first** with your own web tools. Facts, numbers and dates come from sources, not from memory; keep the URLs for `credits`.
 2. `python scripts/talkicut.py storyboard "the prompt" --beats 5 --seconds 30 --out reel.plan.json` scaffolds beats with duration and character budget.
 3. Write each `script` (one idea per beat, 14–16 chars/s) and a literal English `query` for its image. Put the sources you used in the plan's `credits`.
-4. `python scripts/talkicut.py fetch reel.plan.json --n 2 --sheet` downloads freely licensed images from Wikimedia Commons into `media/`, fills each clip's `media`, writes attribution, and renders a contact sheet. **Look at `media/sheet.jpg`** and re-query any beat whose image is off-topic before rendering.
+4. `python scripts/talkicut.py fetch reel.plan.json --n 2 --sheet --music "electronic music loop"` downloads freely licensed images from Wikimedia Commons into `media/`, fills each clip's `media`, writes attribution, picks a CC music track, and renders a contact sheet. **Look at `media/sheet.jpg`** and re-query any beat whose image is off-topic before rendering.
 5. `render` and `verify` as usual. `9:16` by default, `16:9` for YouTube, `auto` follows the first image. A slideshow beat lasts as long as its narration, so there is no dead air between caption and next beat.
 
 A beat with no image still works: it renders on a dark canvas with its title and captions. Research rules, query tips and licensing: `references/auto-video.md`.
@@ -98,6 +98,7 @@ python scripts/talkicut.py render plan.json --brief
 | frame shape | `--aspect auto \| 9:16 \| 4:5 \| 1:1 \| 16:9` |
 | framing | `--fit blur \| cover \| pad` (matching shapes scale straight, no blur) |
 | caption look | `--style clean \| tiktok \| bold` |
+| background music | `--music track.mp3`, `--music-volume 0.14` (looped, ducked, faded) |
 | extras | `--srt`, `--thumbnail`, `--dry-run`, `--json` |
 | one file from all clips | `--stitch` or plan `"stitch": true` |
 | subset / overwrite / parallel | `--only a,b`, `--force`, `--jobs 4` |
