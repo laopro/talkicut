@@ -923,8 +923,8 @@ def cmd_fetch(args):
     plan["credits"] = credits
     plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     if credits:
-        lines = [f"{c['title']} — {c['creator']} — {c['license']} — {c['page'] or c['url']}"
-                 for c in credits]
+        lines = [f"{c.get('title', '')} — {c.get('creator', '')} — {c.get('license', '')} — "
+                 f"{c.get('page') or c.get('url', '')}" for c in credits]
         (media_dir / "credits.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\n{filled} clip(s) with media, {len(credits)} credit(s) -> {media_dir}")
     pending = [c for c in clips if str(c.get("query") or "").strip() and not c.get("media")]
