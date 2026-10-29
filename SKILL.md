@@ -1,77 +1,108 @@
 ---
 name: talkicut
-description: Turns screen recordings or a bare topic into finished videos with TTS narration, burned captions, motion and optional music, using only Python + ffmpeg. Use for reels, shorts, tutorials, demos, voiceover, subtitles, or when AI clippers fail on silent footage. Triggers: screen recording, grabación de pantalla, tutorial, demo, clip, subtítulos, ponerle voz, reel, 9:16, 16:9, talkicut.
+description: Makes finished short videos (reels, shorts, TikTok, YouTube) from a bare topic or a screen recording - spoken hook, real on-topic footage and images from the web, animated data charts, word-by-word captions, NCS music - using only Python + ffmpeg, no API keys. Triggers: video, reel, short, TikTok, hazme un video, video sobre, edit this recording, grabación de pantalla, subtítulos, ponerle voz, 9:16, talkicut.
 ---
 
 # talkicut
 
-Silent recording (or just a topic) in, finished video out. You read the footage, pick beats, write narration; the script renders. Any OS, any model, no API keys.
+You write the plan (research, script, what to show); the script finds the visuals and renders. Any OS, any model, no keys.
 
-## Pick the shape
-
-| Wants | Do |
-|---|---|
-| reels / shorts / TikTok | 2–5 clips, 15–35 s, `--aspect 9:16` |
-| YouTube / course | one clip or ordered beats, `--aspect auto` |
-| "edit the whole video" | beats over the full recording + `"stitch": true` |
-| no footage, just a topic | `storyboard` → research → `fetch` → `render` |
-
-Ambiguous? Ask at most 3 questions with defaults (destination, length, voice). Never ask for timestamps or a transcript: `probe` and `sheet` do that.
-
-## Commands (from the skill folder)
+## Topic only (most requests) - 3 steps
 
 ```bash
-python scripts/talkicut.py doctor
+python scripts/talkicut.py storyboard "tema" --beats 4 --seconds 25 --out v.plan.json
+# fill v.plan.json (rules below)
+python scripts/talkicut.py make v.plan.json --out ~/Desktop/video.mp4
+```
+
+`make` downloads visuals + NCS music, renders, crossfades the beats and copies the result. Then open `media/sheet.jpg` once: a wrong picture -> clear that beat's `media`, change its `query`, run `make` again.
+
+## Angle first (any topic)
+
+A list of true facts is boring. Before any beat, research until you can fill `angle` with one sentence:
+**"Most people think X, but actually Y, because Z."** Can't? Research more; don't write yet.
+
+Where angles hide, for any subject:
+- a number that contradicts intuition (scale, cost, speed, odds)
+- the cause behind a famous fact, or who actually profits
+- a near-failure, a reversal, a "almost didn't happen"
+- what it means for the viewer (money, time, health, their phone, their job)
+- a myth most people repeat, and what the data says
+
+| Topic type | Shape that works |
+|---|---|
+| news / trend | what changed -> why now -> who wins/loses -> what it means for you |
+| product / tech | the claim -> the catch -> the number that proves it -> buy or wait |
+| history / person | the moment it almost failed -> the decision -> the outcome today |
+| science / nature | the weird fact -> how it works in one image -> the scale (chart) |
+| how-to / tips | the mistake everyone makes -> the fix -> the result |
+
+Story order: hook = the tension (not the topic name) -> context in one beat -> evidence (chart) -> the twist/answer -> a question to the viewer. Each beat must make the next one necessary.
+
+Banned: definitions everyone knows, "es muy popular/famoso", opening with "Hoy hablaremos de", facts with no link between them, ending on a number.
+
+## Filling the plan
+
+Each beat: a `script` (what the voice says, 14-16 chars per second of `duration`) and ONE visual:
+
+| visual | when | example |
+|---|---|---|
+| `"video": "..."` | anything that moves: games, sports, places, products, people | `"minecraft survival gameplay no commentary 4k"` |
+| `"query": "..."` | a specific thing to show | `"nvidia rtx 5090 card"` |
+| `"chart": {...}` | any number, ranking, comparison, trend | see below |
+| nothing | a punchline or quote | big animated text |
+
+- Beat 1 `title` is the **spoken hook** (pre-filled from a bank; keep or swap). Its `script` then delivers the surprising fact.
+- Mix visuals: footage -> chart -> image beats; never three photos in a row.
+- Last beat ends on a question or a call to action (`¿Tú qué opinas?`), never on a flat number.
+- Searches in English, concrete nouns + the brand/name (`"GTA V gameplay"`, not `"videogames"`).
+- 3-6 beats for 15-40 s. One idea per beat. Write for the ear; never invent numbers.
+
+### Charts (real data only)
+
+Research with your web tools first; every value needs a `source` (it is printed on screen).
+
+```json
+"chart": {"type": "counter", "value": 300000000, "label": "copias vendidas", "source": "Mojang, 2023"}
+"chart": {"type": "bar", "title": "Millones de copias", "labels": ["Minecraft", "GTA V"], "values": [300, 200], "compact": false, "source": "..."}
+"chart": {"type": "line", "title": "Precio RAM 32 GB (USD)", "labels": ["2024", "2025", "2026"], "values": [90, 120, 450], "prefix": "$", "source": "..."}
+"chart": {"type": "table", "title": "...", "columns": ["Juego", "Año", "Ventas"], "rows": [["Minecraft", "2011", "300 M"]], "source": "..."}
+```
+
+## Screen recording / footage
+
+```bash
 python scripts/talkicut.py probe video.mp4 --json
 python scripts/talkicut.py sheet video.mp4 --max-sheets 2 --every 6
 python scripts/talkicut.py plan video.mp4 --beats 4 --full
-python scripts/talkicut.py render video.plan.json --brief
-python scripts/talkicut.py verify clips --brief
+python scripts/talkicut.py render video.plan.json --stitch --brief
 ```
 
-Look at one or two sheet frames, say what happens, and that sentence is the narration. No vision: `ocr video.mp4 --every 6 --out ocr.json`, then grep it. No cuts means one take: cut by content.
+Look at one or two sheet frames, say what happens: that sentence is the narration. No vision: `ocr video.mp4 --every 6 --out ocr.json`, then grep it. Chart beats work here too.
 
-## Prompt only (no footage)
+## Useful flags
 
-1. Research with web tools; keep the URLs.
-2. `storyboard "prompt" --beats 5 --seconds 30 --out reel.plan.json`
-3. Fill each `script` (14–16 chars/s, one idea) and a literal English `query`.
-4. `fetch reel.plan.json --n 1 --music "NCS progressive house"` → images, credits, track. Check `media/sheet.jpg`.
-5. `render --stitch` + `verify`.
-
-## Plan rules
-
-- 14–16 chars/s, aim ~85% of the clip; too long means cut words, not tempo.
-- Write for the ear; never invent labels, numbers or features.
-- `audio`: `tts` | `source` | `mix`. `aspect`: `auto` | `9:16` | `4:5` | `1:1` | `16:9`. `title` burns a hook for ~3 s.
-- Full schema: `references/plan-schema.md` (only open it when a field is unclear).
-
-## Render flags
-
-`--audio tts|source|mix`, `--tts auto|edge|system|none`, `--voice`, `--lang`, `--aspect`, `--fit auto|blur|cover|pad`, `--style clean|tiktok|bold`, `--music file|url`, `--music-volume 0.08`, `--stitch`, `--srt`, `--thumbnail`, `--only a,b`, `--force`, `--jobs N`, `--dry-run`, `--json`, `--brief`.
-
-Output: `clips/` beside the plan + `manifest.json` + `credits.txt`.
+`make|render`: `--style tiktok|clean|bold`, `--voice es-MX-JorgeNeural`. `fetch`: `--from wiki` (free licences only), `--music "NCS ..."`, `--n 2`. `render`: `--only name --force` re-renders one beat, `--aspect 16:9`, `--srt`, `--thumbnail`.
 
 ## Token budget
 
-- `--brief` by default; `--json` only for fields you need.
-- One sheet, ~15 frames, instead of six images. Grep `ocr.json`; never paste it whole.
-- Edit the plan and re-render with `--only name --force`; do not regenerate untouched clips.
-- Do not re-read rendered frames: `manifest.json` has duration, size, audio.
-- Open a reference file only when the task actually needs it.
+- `make` + `--brief` output; never paste `ocr.json` or `manifest.json` whole.
+- Look at `media/sheet.jpg` once, not every image; do not re-read rendered frames.
+- Open `references/plan-schema.md` only when a field is unclear.
 
 ## Fixes
 
 | Symptom | Fix |
 |---|---|
-| `edge-tts failed` | `--tts system` (System.Speech / `say` / `espeak-ng`) |
-| `filter ass missing` | ffmpeg build without libass: captions skipped, install a full build |
-| captions drift or stack | keep `max_chars` ≤ 30 |
-| stitch fails | render all clips in one run; `--only` cannot stitch a subset |
-| `fetch` finds nothing | concrete English nouns ("data center servers"), or a text-only beat |
-| image off-topic | rewrite the query; Wikimedia matches words, not meaning |
+| `edge-tts failed` | `--tts system` |
+| `filter ass missing` | install a full ffmpeg build (captions need libass) |
+| beat renders as text, no picture | its search found nothing usable: rewrite `query`/`video` with concrete English nouns |
+| wrong / watermarked picture | clear that beat's `media`, change `query`, `make` again |
+| `no footage` | `yt-dlp` missing (`pip install yt-dlp`) or the search is too vague |
+| chart failed | Pillow missing (`pip install pillow`) or `values` not numbers |
 
 ## Files
 
-- `scripts/talkicut.py` — doctor, probe, plan, storyboard, fetch, sheet, ocr, render, verify, selftest.
-- `references/` — `plan-schema` (fields), `auto-video` (prompt-only), `editing` (full edits), `narration`, `platforms`, `ffmpeg-notes`.
+- `scripts/talkicut.py` - doctor, storyboard, fetch, make, render, verify, probe, plan, sheet, ocr, selftest.
+- `assets/topic.plan.example.json` - a complete topic-only plan to copy.
+- `references/` - `plan-schema` (every field), `auto-video` (topic-only details), `editing`, `narration`, `platforms`, `ffmpeg-notes`.

@@ -4,7 +4,7 @@
 
 A screen recording with no audio track is the modern silent film: no transcript, nothing for an AI clipper to select. talkicut reads the recording, helps you choose the beats, writes nothing for you, speaks the narration you wrote, and burns word-synced captions into a 9:16 clip.
 
-No footage? Give it a topic. `storyboard` scaffolds the beats, `fetch` downloads freely licensed images (and a music track) from Wikimedia Commons, and `render` turns them into a moving, narrated video with attribution.
+No footage? Give it a topic. `storyboard` scaffolds the beats, `make` pulls real footage (YouTube) and images (web search) for each beat, draws animated charts from the data you give it, adds NCS music, and renders one narrated, crossfaded video with a spoken hook and word-by-word captions.
 
 Plain Python + ffmpeg. No API keys, no accounts, no cloud. Works on Windows, macOS and Linux, under any agent that can run a shell, with any model - including models that cannot see images.
 
@@ -62,12 +62,11 @@ With no recording at all:
 
 ```bash
 python scripts/talkicut.py storyboard "un reel sobre las IA actuales" --beats 4 --seconds 28 --out reel.plan.json
-python scripts/talkicut.py fetch reel.plan.json --n 2 --music "NCS progressive house"   # Wikimedia Commons -> media/ + credits.txt
-python scripts/talkicut.py render reel.plan.json
-python scripts/talkicut.py verify clips
+# fill: title (spoken hook), script, and one of video / query / chart per beat
+python scripts/talkicut.py make reel.plan.json --out reel.mp4   # fetch + render + crossfade + music
 ```
 
-The agent researches the topic with its own web tools, writes the narration and one image query per beat, and cites its sources in `credits`. The pipeline does not invent facts.
+The agent researches the topic with its own web tools, writes the narration and one visual per beat (footage search, image search or a chart with sourced numbers). The pipeline does not invent facts.
 
 `selftest` renders a synthetic video end to end, so you can tell "my plan is wrong" apart from "this machine is broken".
 
@@ -76,11 +75,11 @@ The agent researches the topic with its own web tools, writes the narration and 
 - 1080x1920 (or 1:1, 4:5, 16:9), full screen visible over a blurred fill - no UI is cropped away
 - `--aspect auto` keeps a horizontal recording horizontal, scaled straight with no blur
 - burned captions in three presets (`clean`, `tiktok`, `bold`), word-synced when edge-tts is available
-- optional hook title for the first seconds of each clip
+- a spoken hook on a colour box, then captions where the word being said lights up
 - audio normalized to -16 LUFS, with a silent AAC track when there is no voice
 - `manifest.json`, plus optional `.srt` and `.jpg` per clip
 - `--stitch` joins the clips in plan order into one file: a full-video edit with the same encode
-- prompt-only reels: Ken Burns push + pan over fetched stills, four crossfade styles, captions that fade and pop, beats that last exactly as long as the narration, and `credits.txt` with every image and music license
+- prompt-only reels: real footage, full-bleed pans and Ken Burns over web images, animated counter / bar / line / table charts, crossfades inside and between beats, beats that last exactly as long as the narration, and `credits.txt` with every source
 - background music: `--music track.mp3`, a YouTube/NCS URL, or `fetch --music "NCS progressive house"` (yt-dlp) loops under the voice at 8%, faded in and out
 - `+faststart` so platforms start processing the upload immediately
 
@@ -92,7 +91,8 @@ The agent researches the topic with its own web tools, writes the narration and 
 | `probe` | duration, resolution, audio, scene cuts, as text or `--json` |
 | `plan` | scaffolds `plan.json` with beats snapped to real cuts, and a character budget per beat |
 | `storyboard` | scaffolds a plan from a prompt, for videos with no source footage |
-| `fetch` | downloads freely licensed images for the plan's queries, plus attribution; `--sheet` writes a contact sheet to review them, `--music "query"` adds a royalty-free track (yt-dlp, Commons fallback) |
+| `fetch` | per beat: footage (`video`, yt-dlp) and images (`query`, web search; `--from wiki` for free licences only), plus an NCS track; `--sheet` writes a contact sheet to review them |
+| `make` | `fetch` + `render --stitch` + copy to `--out`: one call from plan to finished video |
 | `sheet` | contact sheets with timestamps, for vision models |
 | `ocr` | timestamped UI transcript, for models without vision |
 | `render` | plan -> finished clips |
@@ -117,13 +117,14 @@ The agent researches the topic with its own web tools, writes the narration and 
 - `references/narration.md` - pacing math, hooks, per-language notes
 - `references/platforms.md` - install matrix, voices per OS, known breakage
 - `references/ffmpeg-notes.md` - filter chains and the bugs behind them
-- `assets/plan.example.json` - copy-paste starting point
+- `assets/plan.example.json` - copy-paste starting point for a recording
+- `assets/topic.plan.example.json` - topic-only plan: angle, spoken hook, footage, charts, closing question
 
 ## Limits
 
 - It does not choose highlights for you: no ASR and no virality model. Beat selection and narration are the judgment part.
 - A full edit is built from the beats you define; it does not detect silences or dead time automatically.
-- Prompt-only videos use stills from Wikimedia Commons, not stock video. `fetch` ranks by title and photo-ness and `--sheet` shows every pick, but a wrong image is always possible: look at the sheet before publishing.
+- Web images and YouTube footage are not licence-checked (`credits.txt` lists every source page; use `--from wiki` when that matters). A wrong pick is always possible: look at `media/sheet.jpg` before publishing.
 - Captions are word-synced only with edge-tts; OS voices get proportional timing (good to ~0.3 s over a 30 s clip).
 - Face-tracking crops are out of scope - screen content should stay uncropped anyway.
 

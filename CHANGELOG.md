@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.0.0
+
+Videos that hold attention, from one plan and one command.
+
+- `make plan.json --out video.mp4`: fetch + render + crossfaded stitch + copy in one call.
+- Angle first: `storyboard` adds an `angle` field ("most think X, but actually Y, because Z") and `SKILL.md` gives a topic-agnostic recipe for finding one and shaping the beats around it; `make` warns when it is empty.
+- Visuals that match the topic: `query` uses keyless web image search (Bing) ranked by relevance; new `video` field downloads only a few seconds of real footage from YouTube (yt-dlp, past the intro). `--from wiki` keeps the old free-licence-only path, now with a relevance gate.
+- Motion graphics: `chart` beats render animated `counter`, `bar`, `line` and `table` cards (Pillow -> ffmpeg) with the data source on screen.
+- Spoken hook: the first beat's `title` is said out loud on a coloured box; captions start after it. `storyboard` pre-fills it from a bank of hooks.
+- Captions light up the word being spoken (`highlight`); vertical videos default to the `tiktok` preset above the platform UI.
+- Wide stills pan across a vertical frame full-bleed instead of sitting small over a blur; text-only beats get an animated gradient and big centred captions.
+- Slideshow beats crossfade into each other (footage edits keep stream-copy cuts).
+- Music: `fetch` picks an NCS track by default (`music_query`), accepting only NoCopyrightSounds uploads; never a random YouTube hit.
+- Downloads reject HTML disguised as images, GIFs, tiny pictures and watermarked wallpaper previews.
+
 ## 3.3.2
 
 Less noise, fewer tokens.

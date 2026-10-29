@@ -46,13 +46,19 @@
     {
       "id": 8,
       "prompt": "usando talkicut hacé un reel sobre las IA actuales",
-      "expected_output": "Researches the topic, writes 3-6 beats with narration and English image queries, runs storyboard + fetch + render + verify, delivers a 9:16 mp4 with voice, captions and a credits.txt citing sources and image licenses, without inventing facts",
+      "expected_output": "Researches the topic, fills `angle` with a non-obvious 'most think X, but actually Y' sentence, writes 3-6 beats (spoken hook, one of video/query/chart each, sourced numbers in charts, closing question), runs storyboard + make, delivers one 9:16 mp4 with voice, word-highlighted captions, music and credits.txt, without inventing facts",
       "files": []
     },
     {
       "id": 9,
       "prompt": "hacé un reel sobre la RAM y ponele música y animaciones",
-      "expected_output": "Runs storyboard + fetch with --music, renders with --stitch and a music track, verifies the mp4 has audio, and mentions the track's license from credits.txt",
+      "expected_output": "Uses chart beats (counter/bar/line) with real, sourced RAM price data for the animations, real footage or on-topic images for the rest, runs make (NCS music is picked by default), and delivers one mp4 with audio",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "hazme un video corto sobre el agua",
+      "expected_output": "Does not list obvious facts: finds a surprising angle first (e.g. a counter-intuitive number or a hidden cost), fills `angle`, builds the beats as hook -> context -> chart -> twist -> question, runs make and delivers one mp4",
       "files": []
     }
   ]

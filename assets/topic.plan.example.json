@@ -1,0 +1,35 @@
+{
+  "prompt": "un video sobre Minecraft",
+  "angle": "Todos creen que Minecraft es un juego de niños que ya pasó de moda, pero sigue siendo el más vendido de la historia porque nunca dejó de actualizarse.",
+  "aspect": "9:16",
+  "lang": "es",
+  "audio": "tts",
+  "music_query": "NCS progressive house",
+  "clips": [
+    {
+      "name": "01-hook",
+      "duration": 6,
+      "title": "Casi nadie sabe esto:",
+      "script": "El juego de bloques que todos dan por muerto es el más vendido de la historia.",
+      "video": "minecraft survival gameplay no commentary 4k"
+    },
+    {
+      "name": "02-number",
+      "duration": 6,
+      "script": "Ya pasó los trescientos millones de copias.",
+      "chart": {"type": "counter", "value": 300000000, "label": "copias vendidas de Minecraft", "source": "Mojang, octubre 2023"}
+    },
+    {
+      "name": "03-compare",
+      "duration": 7,
+      "script": "Le saca cien millones a GTA cinco, y casi cuatro veces a Wii Sports.",
+      "chart": {"type": "bar", "title": "Millones de copias", "labels": ["Minecraft", "GTA V", "Wii Sports"], "values": [300, 200, 82.9], "compact": false, "source": "Mojang 2023, Take-Two 2024, Nintendo"}
+    },
+    {
+      "name": "04-close",
+      "duration": 6,
+      "script": "El secreto: lleva quince años recibiendo actualizaciones gratis. ¿Tú todavía lo juegas?",
+      "query": "minecraft creeper steve wallpaper"
+    }
+  ]
+}

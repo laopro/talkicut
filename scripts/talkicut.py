@@ -28,9 +28,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html as html_lib
 import json
 import os
 import platform
+import random
 import re
 import shlex
 import shutil
@@ -43,7 +45,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "3.3.2"
+VERSION = "4.0.0"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -363,6 +365,20 @@ def ass_color(hex_color, default="&H00FFFFFF"):
     return f"&H00{b}{g}{r}".upper()
 
 
+HOOKS = [
+    # each one is said out loud as-is, so none of them has a blank to fill
+    "¿Sabías que...",
+    "Nadie te dijo esto:",
+    "Esto va a sonar raro, pero...",
+    "Lo que no te cuentan:",
+    "Casi nadie sabe esto:",
+    "El error que casi todos cometen:",
+    "Esto cambia todo lo que sabías:",
+    "No vas a creer esto:",
+    "Pon atención, porque esto importa:",
+    "Estos datos te van a volar la cabeza:",
+]
+
 STYLE_PRESETS = {
     # caption looks that survive the two places these clips get watched: a phone
     # in one hand, and a platform UI that eats the bottom 20% of the frame.
@@ -408,20 +424,27 @@ def resolve_style(style, width, height, lang="es"):
         "font": merged.get("font") or "Arial",
         "color": merged.get("color", "#FFFFFF"),
         "outline_color": merged.get("outline_color", "#000000"),
+        # the word being spoken lights up; null turns it off
+        "highlight": merged.get("highlight", "#FFD21F"),
+        "title_box": merged.get("title_box", "#FF2D55"),
+        "align": int(merged.get("align") or 2),
         "max_chars": int(merged.get("max_chars") or (14 if cjk else 30)),
         "max_words": int(merged.get("max_words") or (5 if cjk else 6)),
     }
 
 
-def build_ass(lines, path, width, height, style, title=None, dur=None):
+def build_ass(lines, path, width, height, style, title=None, dur=None, title_end=None):
     def ts(t):
         return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
+
+    def esc(s):
+        return str(s).replace("\n", " ").replace("{", "(").replace("}", ")")  # braces = ASS overrides
 
     size = style["size"]
     primary = ass_color(style["color"])
     outline = ass_color(style["outline_color"])
     border = max(2, round(size * 0.08))
-    tsize = round(size * 1.3)
+    tsize = round(size * 1.25)
 
     header = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {width}", f"PlayResY: {height}",
@@ -431,19 +454,23 @@ def build_ass(lines, path, width, height, style, title=None, dur=None):
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
         f"Style: Cap,{style['font']},{size},{primary},{primary},{outline},&H64000000,1,0,0,0,"
-        f"100,100,0,0,1,{border},1,2,{style['margin_h']},{style['margin_h']},{style['margin_v']},1",
-        f"Style: Title,{style['font']},{tsize},{primary},{primary},{outline},&H00000000,1,0,0,0,"
-        f"100,100,0,0,1,{max(3, round(tsize * 0.1))},2,8,{style['margin_h']},{style['margin_h']},"
-        f"{round(height * 0.11)},1",
+        f"100,100,0,0,1,{border},1,{style['align']},{style['margin_h']},{style['margin_h']},"
+        f"{style['margin_v']},1",
+        # the hook: white on a solid colour box, so it reads over any picture
+        f"Style: Title,{style['font']},{tsize},{primary},{primary},"
+        f"{ass_color(style['title_box'], '&H005522FF')},&H00000000,1,0,0,0,"
+        f"100,100,0,0,3,{max(8, round(tsize * 0.22))},0,8,{style['margin_h']},{style['margin_h']},"
+        f"{round(height * 0.13)},1",
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     body = []
     if title:
-        title_end = min(3.2, (dur or 3.2) * 0.4)
-        safe = str(title).replace("{", "(").replace("}", ")")
-        body.append(f"Dialogue: 0,0:00:00.00,{ts(title_end)},Title,,0,0,0,," 
-                    f"{{\\fad(180,220)\\t(0,320,\\fscx106\\fscy106)}}{safe}")
+        end_t = title_end if title_end else min(3.2, (dur or 3.2) * 0.4)
+        body.append(f"Dialogue: 1,0:00:00.00,{ts(end_t)},Title,,0,0,0,,"
+                    f"{{\\fad(60,200)\\t(0,160,\\fscx116\\fscy116)\\t(160,260,\\fscx100\\fscy100)}}"
+                    f"{esc(title)}")
+    hi = ass_color(style["highlight"]) if style.get("highlight") else None
     for i, line in enumerate(lines):
         start = line[0][0]
         natural_end = line[-1][0] + line[-1][1] + 0.12
@@ -451,9 +478,17 @@ def build_ass(lines, path, width, height, style, title=None, dur=None):
             # never overlap the next line: libass would stack both on screen at once
             natural_end = min(natural_end, lines[i + 1][0][0] - 0.04)
         end = max(natural_end, start + 0.25)
-        text = " ".join(c[2] for c in line).replace("\n", " ")
-        text = text.replace("{", "(").replace("}", ")")  # braces are ASS override syntax
-        body.append(f"Dialogue: 0,{ts(start)},{ts(end)},Cap,,0,0,0,,{{\\fad(70,70)}}{text}")
+        words = [esc(c[2]) for c in line]
+        if not hi:
+            body.append(f"Dialogue: 0,{ts(start)},{ts(end)},Cap,,0,0,0,,{{\\fad(70,70)}}{' '.join(words)}")
+            continue
+        # one event per spoken word, back to back: only the current word is lit
+        for j in range(len(line)):
+            w0 = start if j == 0 else line[j][0]
+            w1 = end if j + 1 == len(line) else max(line[j + 1][0], w0 + 0.01)
+            text = " ".join(f"{{\\c{hi}\\fscx108\\fscy108}}{w}{{\\r}}" if k == j else w
+                            for k, w in enumerate(words))
+            body.append(f"Dialogue: 0,{ts(w0)},{ts(w1)},Cap,,0,0,0,,{text}")
 
     if len(body) > 1:
         times = [ln[0][0] for ln in lines]
@@ -564,6 +599,9 @@ def cmd_doctor(args):
     add("offline-tts", sys_tts, f"{detail}: {'found' if sys_tts else 'missing'} (no internet needed)",
         "Windows/macOS: built in | Debian/Ubuntu: sudo apt install espeak-ng")
 
+    add("yt-dlp", bool(shutil.which("yt-dlp")), "for `video` footage and NCS music",
+        "pip install yt-dlp")
+    add("pillow", has_pillow(), "for `chart` beats", "pip install pillow")
     add("tesseract", bool(shutil.which("tesseract")), "optional, for OCR of frames",
         "Windows: winget install UB-Mannheim.TesseractOCR | macOS: brew install tesseract | "
         "Linux: sudo apt install tesseract-ocr")
@@ -812,6 +850,10 @@ def cmd_plan(args):
 
 WIKI_API = "https://commons.wikimedia.org/w/api.php"
 HTTP_UA = f"{TOOL}/{VERSION} (+https://github.com/laopro/talkicut)"
+# image hosts found through web search reject non-browser agents
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
+VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv", ".m4v")
 
 
 def http_json(url, timeout=25):
@@ -853,15 +895,26 @@ def wiki_images(query, limit):
     return found
 
 
+def query_tokens(query):
+    return [w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) > 2]
+
+
+def token_hits(query, cand):
+    """How many distinct query words actually show up in the file's own title."""
+    text = f"{cand.get('title', '')}".lower()
+    return sum(1 for t in query_tokens(query) if t in text)
+
+
 def candidate_score(query, cand):
     """Rank by what the file says about itself: words beat silence, photos beat diagrams."""
-    tokens = [w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) > 2]
+    tokens = query_tokens(query)
     text = f"{cand.get('title', '')}".lower()
     score = sum(3 for t in tokens if t in text)
     if cand.get("url", "").lower().split("?")[0].endswith((".jpg", ".jpeg")):
         score += 2
     bad = ("logo", "icon", "map", "diagram", "chart", "poster", "cover", "drawing",
-           "illustration", "screenshot", "coat of arms", "flag", "portrait", "sign")
+           "illustration", "screenshot", "coat of arms", "flag", "portrait", "sign",
+           "meme", "infographic", "graph", "meter", "price")
     score -= sum(4 for word in bad if word in text)
     w, h = cand.get("w") or 0, cand.get("h") or 0
     if w and h:
@@ -882,7 +935,7 @@ def make_sheet(paths, out, cell=360, cols=4):
     inputs, chains = [], []
     for i, p in enumerate(paths):
         inputs += ["-i", str(p)]
-        chains.append(f"[{i}:v]scale={cell}:{cell}:force_original_aspect_ratio=decrease,"
+        chains.append(f"[{i}:v]trim=end_frame=1,scale={cell}:{cell}:force_original_aspect_ratio=decrease,"
                       f"pad={cell}:{cell}:(ow-iw)/2:(oh-ih)/2,setsar=1[v{i}]")
     graph = ";".join(chains) + ";" + "".join(f"[v{i}]" for i in range(len(paths))) + \
         f"concat=n={len(paths)}:v=1:a=0,tile={cols}x{rows}:padding=6:margin=6[out]"
@@ -893,8 +946,9 @@ def make_sheet(paths, out, cell=360, cols=4):
 
 def download_image(url, dest_dir: Path, stem: str):
     """Download one image, keeping an extension ffmpeg can trust from the magic bytes."""
-    req = urllib.request.Request(url, headers={"User-Agent": HTTP_UA})
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    ua = HTTP_UA if "wikimedia.org" in url else BROWSER_UA
+    req = urllib.request.Request(url, headers={"User-Agent": ua, "Accept": "image/*,*/*;q=0.8"})
+    with urllib.request.urlopen(req, timeout=25) as resp:
         data = resp.read(15_000_000)
     if len(data) < 8_000:
         raise ValueError("file too small")
@@ -904,13 +958,80 @@ def download_image(url, dest_dir: Path, stem: str):
         ext = ".png"
     elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         ext = ".webp"
-    elif data[:4] == b"GIF8":
-        ext = ".gif"
     else:
-        ext = ".jpg"
+        # hotlink-protected hosts answer with an HTML page; a GIF is usually a meme
+        raise ValueError("not a still image")
     dest = dest_dir / f"{stem}{ext}"
     dest.write_bytes(data)
+    try:
+        dims = probe_media(dest)
+    except SystemExit:
+        dims = {}
+    if min(dims.get("width") or 0, dims.get("height") or 0) < 480:
+        dest.unlink(missing_ok=True)
+        raise ValueError("image too small for a video frame")
     return dest
+
+
+def web_images(query, limit):
+    """Keyless image search (Bing). Ranked by relevance, not licence: the user opted in."""
+    params = {"q": query, "form": "HDRSC2", "first": "1", "qft": "+filterui:imagesize-large"}
+    req = urllib.request.Request(f"https://www.bing.com/images/search?{urllib.parse.urlencode(params)}",
+                                 headers={"User-Agent": BROWSER_UA, "Accept-Language": "en-US,en;q=0.9"})
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        page = resp.read(4_000_000).decode("utf-8", "replace")
+    found, seen = [], set()
+    for raw in re.findall(r'\bm="(\{.*?\})"', page):
+        try:
+            meta = json.loads(html_lib.unescape(raw))
+        except ValueError:
+            continue
+        url = meta.get("murl") or ""
+        if not url.startswith("http") or url in seen:
+            continue
+        # wallpaper/stock "previews" carry a burned-in watermark that fights the captions
+        if re.search(r"preview|watermark|wallpapers-clan|shutterstock|dreamstime|alamy|istockphoto",
+                     url, re.I):
+            continue
+        seen.add(url)
+        page_url = meta.get("purl") or ""
+        found.append({"url": url, "page": page_url, "title": meta.get("t") or "",
+                      "creator": urllib.parse.urlparse(page_url).netloc or "web",
+                      "license": "unknown (web search)", "w": 0, "h": 0})
+        if len(found) >= max(limit * 8, 12):
+            break
+    return found
+
+
+def yt_broll(query, dest_dir: Path, stem: str, seconds: float):
+    """Download only a few seconds of real footage for a beat. Returns (path, meta)."""
+    if not shutil.which("yt-dlp"):
+        raise ValueError("yt-dlp not installed (pip install yt-dlp)")
+    code, out, err = run(["yt-dlp", "--flat-playlist", "--print",
+                          "%(duration)s\t%(webpage_url)s\t%(title)s\t%(channel)s",
+                          f"ytsearch6:{query}"], timeout=60)
+    if code != 0:
+        raise ValueError(err.strip()[:200] or "yt-dlp search failed")
+    for line in out.strip().splitlines():
+        parts = (line.split("\t") + ["", "", "", ""])[:4]
+        try:
+            total = float(parts[0])
+        except ValueError:
+            continue
+        if total < seconds + 20:
+            continue
+        # past the intro, before the outro: that's where the actual footage is
+        start = round(min(max(20.0, total * 0.3), total - seconds - 10), 1)
+        target = dest_dir / f"{stem}.mp4"
+        target.unlink(missing_ok=True)
+        code, _, err = run(["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
+                            "-f", "bv*[height<=1080][ext=mp4]/bv*[height<=1080]/b[height<=1080]",
+                            "--download-sections", f"*{start}-{start + seconds + 0.5}",
+                            "--remux-video", "mp4", "-o", str(target), parts[1]], timeout=240)
+        if code == 0 and target.exists() and target.stat().st_size > 50_000:
+            return target, {"title": parts[2], "creator": parts[3] or "YouTube",
+                            "license": "unknown (YouTube)", "page": parts[1], "url": parts[1]}
+    raise ValueError(f"no usable footage for '{query}'")
 
 
 AUDIO_EXTS = (".mp3", ".ogg", ".oga", ".opus", ".wav", ".flac", ".m4a")
@@ -968,7 +1089,7 @@ def download_audio(url, dest_dir: Path, stem: str):
 
 
 def cmd_fetch(args):
-    """Fill a plan's image slots from Wikimedia Commons, with attribution."""
+    """Fill a plan's visual slots (web images, real footage) and pick a music track."""
     plan_path = Path(args.plan).expanduser().resolve()
     if not plan_path.exists():
         raise SystemExit(f"plan not found: {plan_path}")
@@ -979,58 +1100,85 @@ def cmd_fetch(args):
     media_dir = (plan_path.parent / args.out).resolve()
     media_dir.mkdir(parents=True, exist_ok=True)
     credits = plan.get("credits") or []
-    used = {(c.get("clip"), c.get("url")) for c in credits}
+    taken = {c.get("url") for c in credits}   # one picture never shows up in two beats
+
+    def rel(p):
+        return str(Path(p).relative_to(plan_path.parent)).replace("\\", "/")
 
     filled = 0
     for i, clip in enumerate(clips):
+        name = clip.get("name") or f"clip-{i + 1:02d}"
         query = str(clip.get("query") or "").strip()
-        if not query or clip.get("media"):
+        video_q = str(clip.get("video") or "").strip()
+        if clip.get("chart") or clip.get("media") or not (query or video_q):
             continue
-        try:
-            candidates = wiki_images(query, args.n)
-            candidates.sort(key=lambda c: candidate_score(query, c), reverse=True)
-            credits = [c for c in credits if c.get("clip") != clip.get("name")]
-            used = {(c.get("clip"), c.get("url")) for c in credits}
-        except (OSError, ValueError) as exc:
-            print(f"  ! {clip.get('name', i + 1)}: search failed ({exc})", file=sys.stderr)
-            continue
+        credits = [c for c in credits if c.get("clip") != name]
         got = []
-        for j, cand in enumerate(candidates[: args.n]):
+        if video_q:
             try:
-                path = download_image(cand["url"], media_dir,
-                                      f"{clip.get('name', f'clip-{i + 1:02d}')}-{j + 1}")
+                path, meta = yt_broll(video_q, media_dir, f"{name}-v",
+                                      float(clip.get("duration") or 6) + 1.0)
+                got.append(rel(path))
+                credits.append({"clip": name, **meta})
             except (OSError, ValueError) as exc:
-                print(f"  ! {clip.get('name')}: download failed ({exc})", file=sys.stderr)
-                continue
-            got.append(str(path.relative_to(plan_path.parent)).replace("\\", "/"))
-            key = (clip.get("name"), cand["url"])
-            if key not in used:
-                credits.append({"clip": clip.get("name"), "title": cand["title"],
-                                "creator": cand["creator"], "license": cand["license"],
-                                "url": cand["url"], "page": cand["page"]})
-                used.add(key)
+                print(f"  ! {name}: no footage ({exc})", file=sys.stderr)
+        want = (max(0, args.n - 1) if got else args.n) if query else 0
+        if want:
+            try:
+                if args.source == "wiki":
+                    candidates = wiki_images(query, want)
+                    candidates.sort(key=lambda c: candidate_score(query, c), reverse=True)
+                    required = min(2, len(query_tokens(query)))
+                    if required and candidates and token_hits(query, candidates[0]) < required:
+                        candidates = []   # a wrong photo is worse than a text beat
+                else:
+                    candidates = web_images(query, want)
+            except (OSError, ValueError) as exc:
+                print(f"  ! {name}: image search failed ({exc})", file=sys.stderr)
+                candidates = []
+            imgs = tries = 0
+            for cand in candidates:
+                if imgs >= want or tries >= want * 6:
+                    break
+                if cand["url"] in taken:
+                    continue
+                tries += 1
+                try:
+                    path = download_image(cand["url"], media_dir, f"{name}-{imgs + 1}")
+                except (OSError, ValueError):
+                    continue   # web hosts fail often; the next result usually works
+                taken.add(cand["url"])
+                imgs += 1
+                got.append(rel(path))
+                credits.append({"clip": name, "title": cand["title"], "creator": cand["creator"],
+                                "license": cand["license"], "url": cand["url"], "page": cand["page"]})
         if got:
             clip["media"] = got
             filled += 1
-            print(f"  {clip.get('name')}: {len(got)} image(s) for \"{query}\"")
+            print(f"  {name}: {len(got)} item(s)  [{query or video_q}]")
         else:
-            print(f"  ! {clip.get('name')}: nothing usable for \"{query}\"", file=sys.stderr)
+            print(f"  ! {name}: nothing usable for \"{query or video_q}\" -- renders as a text beat",
+                  file=sys.stderr)
 
-    if args.music:
+    music_q = args.music or (None if args.no_music or plan.get("music")
+                             else plan.get("music_query") or DEFAULT_MUSIC)
+    if music_q:
+        tracks = None
         try:
-            path, meta = yt_music(args.music, media_dir)
+            path, meta = yt_music(music_q, media_dir)
             plan["music"] = str(path.relative_to(plan_path.parent)).replace("\\", "/")
             credits = [c for c in credits if c.get("clip") != "music"]
             credits.append({"clip": "music", "title": meta["title"],
                             "creator": meta["creator"], "license": meta["license"],
                             "url": meta["page"], "page": meta["page"]})
             print(f"  music: {meta['title']} ({meta['creator']})")
-            tracks = None
-        except (OSError, ValueError):
-            tracks = wiki_audio(args.music)
         except (OSError, ValueError) as exc:
-            tracks = []
-            print(f"  ! music search failed ({exc})", file=sys.stderr)
+            print(f"  ! no NCS track ({exc}); trying Wikimedia Commons", file=sys.stderr)
+            try:
+                tracks = wiki_audio(music_q)
+            except (OSError, ValueError) as exc2:
+                tracks = []
+                print(f"  ! music search failed ({exc2})", file=sys.stderr)
         if tracks:
             pick = tracks[0]
             try:
@@ -1070,9 +1218,12 @@ def cmd_storyboard(args):
     total = max(2.0, args.seconds)
     dur = round(total / beats, 2)
     clips = [{"name": f"{i + 1:02d}-beat", "duration": dur, "title": "",
-              "script": "", "query": ""} for i in range(beats)]
-    plan = {"prompt": args.prompt, "aspect": args.aspect, "lang": args.lang,
-            "audio": "tts", "clips": clips}
+              "script": "", "query": "", "video": ""} for i in range(beats)]
+    clips[0]["title"] = random.choice(HOOKS)
+    plan = {"prompt": args.prompt,
+            "angle": "",   # "most think X, but actually Y, because Z" -- written before any beat
+            "aspect": args.aspect, "lang": args.lang,
+            "audio": "tts", "music_query": DEFAULT_MUSIC, "clips": clips}
     out = Path(args.out).expanduser() if args.out else Path("reel.plan.json")
     out.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     if args.json:
@@ -1081,7 +1232,15 @@ def cmd_storyboard(args):
     print(f"plan: {out}\n")
     for c in clips:
         print(f"  {c['name']:<10} {c['duration']:>5.1f}s   script ~{int(c['duration'] * 15 * 0.85)} chars")
-    print(f"\nfill script + query per beat, then: talkicut fetch {out.name} && talkicut render {out.name}")
+    print("\nFIRST fill `angle`: \"most people think X, but actually Y, because Z\" (research until you can).\n"
+          "Every beat serves that angle; the last one answers it and asks the viewer a question.")
+    print(f"\nbeat 1 title = spoken hook (\"{clips[0]['title']}\"). Swap from: {' | '.join(HOOKS)}")
+    print("\nper beat fill `script` (what the voice says) and ONE visual:\n"
+          "  query: \"english image search\"   video: \"youtube search for footage\"\n"
+          "  chart: {\"type\":\"bar\",\"title\":\"...\",\"labels\":[...],\"values\":[...],\"source\":\"site.com\"}\n"
+          "         (types: bar, counter {value,label}, line {labels,values}, table {columns,rows})\n"
+          "  nothing -> big animated text beat")
+    print(f"\nthen: talkicut make {out.name} --out video.mp4")
     return 0
 
 
@@ -1186,15 +1345,274 @@ def load_plan(path):
     return plan
 
 
-def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur"):
-    """Stills into motion: Ken Burns, crossfades, and a frame that keeps the subject whole."""
+# ----------------------------------------------------------------- motion graphics
+
+CHART_TYPES = ("bar", "counter", "line", "table")
+
+
+def has_pillow():
+    try:
+        import PIL  # noqa: F401
+        return True
+    except ImportError:
+        return False
+PALETTE = {"top": (18, 21, 33), "bottom": (6, 7, 12), "text": (245, 246, 250),
+           "muted": (150, 158, 178), "bar": (86, 156, 255), "accent": (255, 204, 41),
+           "stripe": (26, 30, 44), "grid": (40, 45, 62)}
+
+
+def ease_out(t):
+    t = min(1.0, max(0.0, t))
+    return 1 - (1 - t) ** 3
+
+
+def fmt_value(v, ref, chart, lang="es"):
+    """Format v using the unit that fits the final value `ref`, so a count-up never jumps units."""
+    units = ([(1e9, " mil millones"), (1e6, " millones"), (1e4, " mil")]
+             if str(lang).lower().startswith("es") else [(1e9, "B"), (1e6, "M"), (1e3, "K")])
+    div, word = 1.0, ""
+    if chart.get("compact", True):
+        for d, w in units:
+            if abs(ref) >= d:
+                div, word = d, w
+                break
+    dec = chart.get("decimals")
+    if dec is None:
+        dec = 0 if abs(ref / div - round(ref / div)) < 0.05 else 1
+    return f"{chart.get('prefix', '')}{v / div:,.{int(dec)}f}{word}{chart.get('suffix', '')}"
+
+
+def wrap_px(draw, text, font, max_w):
+    lines, cur = [], ""
+    for word in str(text).split():
+        trial = f"{cur} {word}".strip()
+        if not cur or draw.textlength(trial, font=font) <= max_w:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = word
+    return lines + ([cur] if cur else [])
+
+
+def render_chart(chart, width, height, dur, out: Path, lang="es", fps=30):
+    """Animated bar / counter / line / table card, drawn with Pillow and piped into ffmpeg.
+
+    Returns None on success, an error string otherwise.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    except ImportError:
+        return "chart beats need Pillow (pip install pillow)"
+    kind = str(chart.get("type") or "bar").lower()
+    if kind not in CHART_TYPES:
+        return f"unknown chart type '{kind}' (use {', '.join(CHART_TYPES)})"
+    W, H = width, height
+    u = min(W, H) / 1080          # one design unit; layouts are written for a 1080-wide frame
+    font_path = find_font()
+
+    def font(px):
+        px = max(10, int(px))
+        try:
+            return ImageFont.truetype(font_path, px) if font_path else ImageFont.load_default(px)
+        except (OSError, TypeError):
+            return ImageFont.load_default()
+
+    col = Image.new("RGB", (1, H))
+    col.putdata([tuple(int(PALETTE["top"][k] + (PALETTE["bottom"][k] - PALETTE["top"][k]) * y / max(1, H - 1))
+                       for k in range(3)) for y in range(H)])
+    bg = col.resize((W, H))
+    glow = Image.new("RGB", (W, H), (0, 0, 0))
+    ImageDraw.Draw(glow).ellipse([W * 0.15, H * 0.2, W * 0.85, H * 0.6], fill=(36, 44, 92))
+    bg = Image.blend(bg, glow.filter(ImageFilter.GaussianBlur(int(180 * u))), 0.55)
+
+    mx = int(W * 0.08)
+    title_font = font(66 * u)
+    probe = ImageDraw.Draw(bg)
+    title_lines = wrap_px(probe, chart.get("title") or "", title_font, W - 2 * mx)[:3]
+    title_top = int(H * (0.12 if H > W else 0.08))
+    line_h = int(78 * u)
+    title_bottom = title_top + line_h * len(title_lines)
+    area_top = title_bottom + int(70 * u) if title_lines else int(H * 0.16)
+    area_bot = int(H * (0.70 if H > W else 0.74))
+
+    title_layer = Image.new("RGBA", (W, max(1, title_bottom - title_top + int(20 * u))), (0, 0, 0, 0))
+    td = ImageDraw.Draw(title_layer)
+    for k, ln in enumerate(title_lines):
+        td.text((W / 2, k * line_h), ln, font=title_font, fill=PALETTE["text"] + (255,), anchor="ma")
+    if chart.get("source"):
+        ImageDraw.Draw(bg).text((mx, area_bot + int(40 * u)), f"Fuente: {chart['source']}"
+                                if str(lang).startswith("es") else f"Source: {chart['source']}",
+                                font=font(30 * u), fill=PALETTE["muted"])
+    base_full = bg.copy()
+    base_full.paste(title_layer, (0, title_top), title_layer)
+
+    grow = max(0.8, min(1.8, dur * 0.45))     # seconds an element takes to arrive
+    items = len(chart.get("values") or chart.get("rows") or [1])
+    stagger = min(0.22, dur * 0.3 / max(1, items))
+    anim_end = 0.35 + grow + stagger * items + 0.1
+
+    def lerp_color(a, b, t):
+        return tuple(int(a[k] + (b[k] - a[k]) * t) for k in range(3))
+
+    values = [float(v) for v in (chart.get("values") or [])]
+    labels = [str(x) for x in (chart.get("labels") or [])]
+    hl = chart.get("highlight")
+
+    def draw_bar(d, t):
+        n = max(1, len(values))
+        vmax = max([v for v in values if v > 0] or [1])
+        row = (area_bot - area_top) / n
+        bar_h = max(int(18 * u), int(min(row * 0.42, 70 * u)))
+        lab_font, val_font = font(min(40 * u, row * 0.3)), font(min(44 * u, row * 0.34))
+        for i, v in enumerate(values):
+            e = ease_out((t - 0.35 - i * stagger) / grow)
+            y = area_top + i * row
+            color = PALETTE["accent"] if (hl == i or (hl is None and v == vmax and n > 1)) else PALETTE["bar"]
+            d.text((mx, y), labels[i] if i < len(labels) else "", font=lab_font,
+                   fill=lerp_color(PALETTE["bottom"], PALETTE["text"], min(1, e * 2)))
+            by = y + lab_font.size + int(12 * u)
+            full = (W - 2 * mx) * 0.74 * max(0.0, v) / vmax
+            x1 = mx + max(bar_h, full * e)
+            if e > 0:
+                d.rounded_rectangle([mx, by, x1, by + bar_h], radius=bar_h // 2, fill=color)
+                d.text((x1 + int(16 * u), by + bar_h / 2), fmt_value(v * e, v, chart, lang),
+                       font=val_font, fill=PALETTE["text"], anchor="lm")
+
+    def draw_counter(d, t):
+        target = float(chart.get("value") or 0)
+        start = float(chart.get("from") or 0)
+        e = ease_out((t - 0.3) / max(1.0, min(2.2, dur * 0.6)))
+        text = fmt_value(start + (target - start) * e, target, chart, lang)
+        size = 190 * u
+        f = font(size)
+        while d.textlength(fmt_value(target, target, chart, lang), font=f) > W - 2 * mx and size > 40:
+            size *= 0.9
+            f = font(size)
+        cy = (area_top + area_bot) / 2 - int(40 * u)
+        d.text((W / 2, cy), text, font=f, fill=PALETTE["text"], anchor="mm")
+        bar_w = (W - 2 * mx) * 0.5 * ease_out((t - 0.3) / 0.8)
+        d.rounded_rectangle([W / 2 - bar_w / 2, cy + size * 0.62, W / 2 + bar_w / 2,
+                             cy + size * 0.62 + int(10 * u)], radius=int(5 * u), fill=PALETTE["accent"])
+        lab = chart.get("label") or ""
+        lf = font(46 * u)
+        for k, ln in enumerate(wrap_px(d, lab, lf, W - 2 * mx)[:2]):
+            d.text((W / 2, cy + size * 0.62 + int(50 * u) + k * int(58 * u)), ln, font=lf,
+                   fill=lerp_color(PALETTE["bottom"], PALETTE["muted"], ease_out((t - 0.6) / 0.5)),
+                   anchor="ma")
+
+    def draw_line(d, t):
+        n = len(values)
+        if n < 2:
+            return
+        lo, hi = min(values), max(values)
+        pad = (hi - lo) * 0.15 or abs(hi) * 0.1 or 1
+        lo, hi = (0 if lo >= 0 and lo - pad < 0 else lo - pad), hi + pad
+        top, bot = area_top + int(60 * u), area_bot - int(60 * u)
+        xs = [mx + (W - 2 * mx) * i / (n - 1) for i in range(n)]
+        ys = [bot - (bot - top) * (v - lo) / (hi - lo) for v in values]
+        for k in range(4):
+            gy = top + (bot - top) * k / 3
+            d.line([mx, gy, W - mx, gy], fill=PALETTE["grid"], width=max(1, int(2 * u)))
+        e = ease_out((t - 0.35) / (grow * 1.4)) * (n - 1)
+        seg = int(min(n - 2, e))
+        frac = e - seg
+        pts = list(zip(xs[:seg + 1], ys[:seg + 1]))
+        hx, hy = xs[seg] + (xs[seg + 1] - xs[seg]) * frac, ys[seg] + (ys[seg + 1] - ys[seg]) * frac
+        d.line(pts + [(hx, hy)], fill=PALETTE["accent"], width=int(10 * u), joint="curve")
+        r = int(14 * u)
+        d.ellipse([hx - r, hy - r, hx + r, hy + r], fill=PALETTE["text"])
+        cur = values[seg] + (values[seg + 1] - values[seg]) * frac
+        d.text((hx, hy - int(36 * u)), fmt_value(cur, values[-1], chart, lang), font=font(44 * u),
+               fill=PALETTE["text"], anchor="ms" if 0.15 < hx / W < 0.85 else ("ls" if hx / W <= 0.15 else "rs"))
+        lf = font(32 * u)
+        step = 1 if n <= 6 else max(1, n // 5)
+        for i in range(0, n, step):
+            if i < len(labels):
+                d.text((xs[i], bot + int(24 * u)), labels[i], font=lf, fill=PALETTE["muted"], anchor="ma")
+
+    def draw_table(d, t):
+        cols = [str(c) for c in (chart.get("columns") or [])]
+        rows = [[str(c) for c in r] for r in (chart.get("rows") or [])]
+        if not rows:
+            return
+        ncol = max(len(cols), max(len(r) for r in rows))
+        widths = [max([len(cols[c]) if c < len(cols) else 0] + [len(r[c]) if c < len(r) else 0 for r in rows]) + 3
+                  for c in range(ncol)]
+        total = sum(widths)
+        xs = [mx]
+        for w_ in widths[:-1]:
+            xs.append(xs[-1] + (W - 2 * mx) * w_ / total)
+        row_h = min(int(130 * u), (area_bot - area_top) / (len(rows) + 1))
+        fsize = min(50 * u, row_h * 0.4)
+        hf, cf = font(fsize * 0.85), font(fsize)
+        y = area_top
+        for c, name in enumerate(cols):
+            d.text((xs[c] + int(12 * u), y + row_h / 2), name.upper(), font=hf, fill=PALETTE["muted"], anchor="lm")
+        d.rectangle([mx, y + row_h - int(4 * u), W - mx, y + row_h], fill=PALETTE["accent"])
+        for i, r in enumerate(rows):
+            e = ease_out((t - 0.35 - i * stagger) / (grow * 0.6))
+            if e <= 0:
+                continue
+            ry = y + row_h * (i + 1)
+            off = int((1 - e) * 60 * u)
+            if i % 2 == 0 or hl == i:
+                d.rectangle([mx, ry, W - mx, ry + row_h],
+                            fill=lerp_color(PALETTE["bottom"], (58, 48, 10) if hl == i else PALETTE["stripe"], e))
+            for c, cell in enumerate(r):
+                color = PALETTE["accent"] if hl == i else PALETTE["text"]
+                d.text((xs[c] + int(12 * u) + off, ry + row_h / 2), cell, font=cf,
+                       fill=lerp_color(PALETTE["bottom"], color, e), anchor="lm")
+
+    drawer = {"bar": draw_bar, "counter": draw_counter, "line": draw_line, "table": draw_table}[kind]
+    cmd = [FFMPEG, "-hide_banner", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+           "-s", f"{W}x{H}", "-r", str(fps), "-i", "-", "-c:v", "libx264", "-preset", "veryfast",
+           "-crf", "20", "-pix_fmt", "yuv420p", str(out)]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    last = None
+    try:
+        for f in range(max(1, int(round(dur * fps)))):
+            t = f / fps
+            if last is None or t <= anim_end:
+                if t < 0.35 and title_lines:
+                    k = ease_out(t / 0.35)
+                    img = bg.copy()
+                    layer = title_layer.copy()
+                    layer.putalpha(layer.getchannel("A").point(lambda a: int(a * k)))
+                    img.paste(layer, (0, title_top + int((1 - k) * 30 * u)), layer)
+                else:
+                    img = base_full.copy()
+                drawer(ImageDraw.Draw(img), t)
+                last = img.tobytes()
+            proc.stdin.write(last)
+        proc.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass
+    err = proc.stderr.read().decode("utf-8", "replace")
+    if proc.wait() != 0 or not out.exists():
+        return err.strip()[:300] or "chart encode failed"
+    return None
+
+
+def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur", lang="es"):
+    """Beat visuals: animated chart, real footage, or stills with Ken Burns / pans, crossfaded."""
     media = [Path(p) for p in (clip.get("media") or []) if Path(p).exists()]
     out = work / f"broll-{index:02d}.mp4"
     fps = 30
+    if clip.get("chart"):
+        chart = dict(clip["chart"])
+        chart.setdefault("title", clip.get("title") or "")
+        err = render_chart(chart, width, height, dur, out, lang, fps)
+        if err:
+            print(f"  ! {clip['name']}: chart failed: {err}", file=sys.stderr)
+            return None
+        return out
     if not media:
-        # a beat without an image is still a beat: dark canvas, captions carry it
+        # a text beat: slow-moving gradient, the captions sit big in the middle
+        canvas = (f"gradients=s={width}x{height}:r={fps}:c0=0x101528:c1=0x2a1240:c2=0x0b2c3c:"
+                  f"nb_colors=3:speed=0.012:d={dur}" if has_filter("gradients")
+                  else f"color=c=0x111318:s={width}x{height}:r={fps}:d={dur}")
         cmd = [FFMPEG, "-hide_banner", "-v", "error", "-y", "-f", "lavfi",
-               "-i", f"color=c=0x111318:s={width}x{height}:r={fps}:d={dur}",
+               "-i", canvas,
                "-t", f"{dur}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                "-pix_fmt", "yuv420p", str(out)]
         code, _, err = run(cmd, cwd=work)
@@ -1210,7 +1628,7 @@ def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur"):
     blur = ",boxblur=24:2" if has_filter("boxblur") else ""
 
     def frame_mode(img):
-        """auto: fill the frame when the photo is already close to it, otherwise show it whole."""
+        """auto: near the frame's shape -> fill it; wider -> pan across it full-bleed; taller -> blur."""
         if fit != "auto":
             return fit
         try:
@@ -1218,12 +1636,37 @@ def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur"):
             ar = dims["width"] / dims["height"] if dims["height"] else 0
         except SystemExit:
             ar = 0
-        return "cover" if ar and abs(ar - width / height) <= 0.22 * (width / height) else "blur"
+        target = width / height
+        if ar and abs(ar - target) <= 0.22 * target:
+            return "cover"
+        return "pan" if ar > target else "blur"
 
+    tail = f"fps={fps},setsar=1,format=yuv420p"
     inputs, chains = [], []
     for i, img in enumerate(media):
+        mode = frame_mode(img)
+        if img.suffix.lower() in VIDEO_EXTS:
+            inputs += ["-stream_loop", "-1", "-t", f"{seg + 0.5}", "-i", str(img)]
+            if mode == "blur":
+                base = (f"[{i}:v]split=2[bg{i}][fg{i}];[bg{i}]scale={width}:{height}:"
+                        f"force_original_aspect_ratio=increase,crop={width}:{height}{blur}[b{i}];"
+                        f"[fg{i}]scale={width}:{height}:force_original_aspect_ratio=decrease[f{i}];"
+                        f"[b{i}][f{i}]overlay=(W-w)/2:(H-h)/2")
+            else:
+                base = (f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                        f"crop={width}:{height}")
+            chains.append(f"{base},{tail},trim=duration={seg},setpts=PTS-STARTPTS[v{i}]")
+            continue
+        if mode == "pan":
+            # a landscape photo in a vertical frame: full-bleed, sliding across the subject
+            inputs += ["-loop", "1", "-framerate", str(fps), "-t", f"{seg + 0.2}", "-i", str(img)]
+            ph = int(height * 1.06) // 2 * 2
+            span = f"0.12+0.76*t/{seg}" if i % 2 == 0 else f"0.88-0.76*t/{seg}"
+            chains.append(f"[{i}:v]scale=-2:{ph},crop={width}:{height}:x='(iw-ow)*({span})':"
+                          f"y='(ih-oh)/2',{tail},trim=duration={seg},setpts=PTS-STARTPTS[v{i}]")
+            continue
         inputs += ["-i", str(img)]
-        cover = frame_mode(img) == "cover"
+        cover = mode == "cover"
         zin = i % 2 == 0
         z = f"1+0.14*on/{frames}" if zin else f"1.14-0.14*on/{frames}"
         if i % 4 == 0:
@@ -1251,7 +1694,7 @@ def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur"):
                     f"[b{i}][f{i}]overlay=(W-w)/2:(H-h)/2")
         chains.append(
             f"{base},zoompan=z='{z}':x='{px}':y='{py}':d={frames}:s={width}x{height}:"
-            f"fps={fps},setsar=1[v{i}]"
+            f"{tail}[v{i}]"
         )
 
     if n > 1 and xf > 0:
@@ -1304,25 +1747,37 @@ def render_clip(clip, plan, opts, work: Path, index: int):
                 "duration": duration_of(out_path)}
 
     audio_mode = clip.get("audio") or plan.get("audio") or opts["audio"]
+    title = (clip.get("title") or "").strip()
+
+    def norm(s):
+        return re.sub(r"[\W_]+", " ", s.lower()).strip()
+
+    # The opening title is the hook: it is said out loud, not just printed, and the
+    # captions pick up after it instead of repeating it.
+    is_first = clip is (plan.get("clips") or [None])[0]
+    hook = bool(title) and not clip.get("chart") and bool(clip.get("say_title", is_first))
+    spoken = f"{title} {script}".strip() if hook and not norm(script).startswith(norm(title)) else script
+    n_hook = len(title.split()) if hook else 0
     # "source" means: the original audio is the sound of this clip, so no narration is generated
-    want_voice = bool(script) and opts["voiceover"] and audio_mode != "source"
+    want_voice = bool(spoken) and opts["voiceover"] and audio_mode != "source"
 
     speech = None
     if want_voice:
         try:
-            speech = make_speech(script, opts["tts"], clip.get("voice") or plan.get("voice") or opts["voice"],
+            speech = make_speech(spoken, opts["tts"], clip.get("voice") or plan.get("voice") or opts["voice"],
                                  lang, dur, work, f"tts-{index:02d}")
             # a slideshow beat lasts as long as its voice: no dead air after the last caption
             if not plan.get("source"):
-                dur = round(max(2.2, min(dur, speech.duration + 0.35)), 3)
+                floor = 3.5 if clip.get("chart") else 2.2   # a chart needs time to animate
+                dur = round(max(floor, min(dur, speech.duration + 0.35)), 3)
             print(f"  {clip['name']}: voice {speech.engine} {speech.duration:.1f}s / clip {dur:.1f}s",
                   file=sys.stderr)
         except TtsUnavailable as exc:
             print(f"  ! {clip['name']}: no voice ({exc})", file=sys.stderr)
 
     src_path, src_start, src_info = plan["source"], start, info
-    if not plan.get("source"):
-        broll = build_broll(clip, width, height, dur, work, index, fit)
+    if not plan.get("source") or clip.get("chart"):
+        broll = build_broll(clip, width, height, dur, work, index, fit, lang)
         if not broll:
             return {"name": clip["name"], "ok": False, "error": "b-roll build failed"}
         src_path, src_start = str(broll), 0.0
@@ -1356,13 +1811,21 @@ def render_clip(clip, plan, opts, work: Path, index: int):
     style = resolve_style(clip.get("captions_style") or plan.get("captions_style") or
                           opts["captions_style"], width, height, lang)
     captions_on = False
-    title = (clip.get("title") or "").strip()
-    if (script or title) and opts["captions"] and has_filter("ass"):
-        words = (speech.words or proportional_words(script, min(speech.duration, dur))) if speech \
-            else proportional_words(script, dur)
+    text_beat = (not plan.get("source") and not clip.get("chart")
+                 and not any(Path(m).exists() for m in (clip.get("media") or [])))
+    if text_beat:
+        # nothing to look at but the words: put them big in the middle
+        style = {**style, "align": 5, "size": int(style["size"] * 1.45),
+                 "max_chars": min(style["max_chars"], 16), "max_words": min(style["max_words"], 4)}
+    if (spoken or title) and opts["captions"] and has_filter("ass"):
+        words = (speech.words or proportional_words(spoken, min(speech.duration, dur))) if speech \
+            else proportional_words(spoken, dur)
+        hook_words, words = words[:n_hook], words[n_hook:]
+        title_end = max(1.2, hook_words[-1][0] + hook_words[-1][1] + 0.3) if hook_words else None
         lines = group_lines(words, style["max_chars"], style["max_words"]) if words else []
         ass = work / f"cap-{index:02d}.ass"
-        build_ass(lines, ass, width, height, style, title=title or None, dur=dur)
+        build_ass(lines, ass, width, height, style, title=None if clip.get("chart") else (title or None),
+                  dur=dur, title_end=title_end)
         vf += f",ass=cap-{index:02d}.ass"   # relative to cwd: no path escaping anywhere
         captions_on = bool(lines)
         if opts["srt"] and lines:
@@ -1425,11 +1888,14 @@ def render_clip(clip, plan, opts, work: Path, index: int):
             "script_chars": len(script)}
 
 
-def stitch_clips(clips, results, out_dir: Path, name: str):
+def stitch_clips(clips, results, out_dir: Path, name: str, crossfade=False):
     """Join the rendered segments into one video, in plan order.
 
-    Segments come from the same encoder settings, so the concat demuxer can copy
-    the streams instead of re-encoding the whole timeline.
+    Cuts between beats from the same source recording are real edit points --
+    stream-copy concat (no re-encode) is both correct and nearly free there.
+    A prompt-only slideshow has no such continuity: a hard cut between two
+    unrelated stock photos reads as a glitch, not a cut, so those get a short
+    xfade/acrossfade instead. That needs a re-encode, which is why it's opt-in.
     """
     by_name = {r["name"]: r for r in results}
     paths = []
@@ -1439,9 +1905,37 @@ def stitch_clips(clips, results, out_dir: Path, name: str):
             return None, f"missing clip {clip['name']}"
         paths.append(Path(r["path"]).resolve())
 
+    out = out_dir / f"{name}.mp4"
+    if crossfade and len(paths) > 1 and has_filter("xfade"):
+        durs = [duration_of(p) for p in paths]
+        xf = round(min(0.3, min(durs) * 0.3), 3)
+        if xf > 0.02:
+            inputs = []
+            for p in paths:
+                inputs += ["-i", str(p)]
+            vprev, aprev, t = "0:v", "0:a", durs[0]
+            chains = []
+            for i in range(1, len(paths)):
+                trans = ("fade", "slideleft", "zoomin", "wipeup")[(i - 1) % 4]
+                off = round(t - xf, 3)
+                vout, aout = f"v{i}", f"a{i}"
+                chains.append(f"[{vprev}][{i}:v]xfade=transition={trans}:duration={xf}:offset={off}[{vout}]")
+                chains.append(f"[{aprev}][{i}:a]acrossfade=d={xf}[{aout}]")
+                vprev, aprev = vout, aout
+                t += durs[i] - xf
+            code, _, err = run([FFMPEG, "-hide_banner", "-v", "error", "-y", *inputs,
+                                "-filter_complex", ";".join(chains),
+                                "-map", f"[{vprev}]", "-map", f"[{aprev}]",
+                                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                                "-pix_fmt", "yuv420p", "-c:a", "aac",
+                                "-movflags", "+faststart", str(out)])
+            if code == 0 and out.exists():
+                return out, None
+            print(f"  ! crossfade stitch failed, falling back to a hard cut: {err.strip()[:200]}",
+                  file=sys.stderr)
+
     listing = out_dir / f".{name}.concat.txt"
     listing.write_text("".join(f"file '{p.as_posix()}'\n" for p in paths), encoding="utf-8")
-    out = out_dir / f"{name}.mp4"
     try:
         code, _, err = run([FFMPEG, "-hide_banner", "-v", "error", "-y",
                             "-f", "concat", "-safe", "0", "-i", str(listing),
@@ -1453,18 +1947,50 @@ def stitch_clips(clips, results, out_dir: Path, name: str):
     return out, None
 
 
+NCS_CHANNELS = ("nocopyrightsounds", "ncs")
+DEFAULT_MUSIC = "NCS progressive house"   # upbeat; bare "NCS" returns whatever genre is newest
+
+
 def yt_music(query_or_url, dest_dir: Path, stem="music"):
-    """Download one track with yt-dlp (NCS, YouTube, SoundCloud). Returns (path, meta)."""
+    """Download one track with yt-dlp. Returns (path, meta).
+
+    A bare search term is only ever matched against known copyright-free channels
+    (NCS and friends) -- a plain `ytsearch1` would hand back whatever YouTube ranks
+    first for the words, which is routinely a copyrighted upload with a misleading
+    title. An explicit URL is trusted as-is: the caller picked that exact track.
+    """
     if not shutil.which("yt-dlp"):
         raise ValueError("yt-dlp not installed (pip install yt-dlp)")
     dest_dir.mkdir(parents=True, exist_ok=True)
-    target = query_or_url if query_or_url.startswith(("http://", "https://")) \
-        else f"ytsearch1:{query_or_url}"
-    code, out, err = run(["yt-dlp", "--no-playlist", "--print",
-                          "%(title)s\t%(uploader)s\t%(webpage_url)s", target])
-    if code != 0:
-        raise ValueError(err.strip()[:200] or "yt-dlp search failed")
-    title, uploader, page = (out.strip().split("\t") + ["", "", ""])[:3]
+    if query_or_url.startswith(("http://", "https://")):
+        target = query_or_url
+        code, out, err = run(["yt-dlp", "--no-playlist", "--print",
+                              "%(title)s\t%(uploader)s\t%(webpage_url)s", target])
+        if code != 0:
+            raise ValueError(err.strip()[:200] or "yt-dlp lookup failed")
+        title, uploader, page = (out.strip().split("\t") + ["", "", ""])[:3]
+    else:
+        code, out, err = run(["yt-dlp", "--flat-playlist", "--no-playlist", "--print",
+                              "%(uploader)s\t%(title)s\t%(webpage_url)s\t%(duration)s",
+                              f"ytsearch12:{query_or_url}"])
+        if code != 0:
+            raise ValueError(err.strip()[:200] or "yt-dlp search failed")
+
+        def one_song(c):
+            # hour-long "best of" mixes are hundreds of MB for 20 s of background
+            try:
+                return 60 <= float(c[3]) <= 600
+            except (IndexError, ValueError):
+                return False
+
+        candidates = [ln.split("\t") for ln in out.strip().splitlines() if ln.strip()]
+        match = next((c for c in candidates
+                      if len(c) >= 3 and any(ch in c[0].lower() for ch in NCS_CHANNELS)
+                      and one_song(c)), None)
+        if not match:
+            raise ValueError(f"no copyright-free (NCS) track found for '{query_or_url}'")
+        uploader, title, page = match[0], match[1], match[2]
+        target = page
     pattern = str(dest_dir / f"{stem}.%(ext)s")
     code, _, err = run(["yt-dlp", "--no-playlist", "-x", "--audio-format", "mp3",
                         "--audio-quality", "5", "-o", pattern, target])
@@ -1544,7 +2070,9 @@ def cmd_render(args):
             music = None
     work = Path(tempfile.mkdtemp(prefix="tc-render-"))
     plan_style = dict(plan.get("captions_style") or {})
-    plan_style["preset"] = args.style or plan_style.get("preset") or "clean"
+    # vertical video is watched under a platform UI: captions sit above it by default
+    vertical = (plan.get("aspect") or args.aspect) in ("9:16", "4:5")
+    plan_style["preset"] = args.style or plan_style.get("preset") or ("tiktok" if vertical else "clean")
     opts = {
         "info": info, "out_dir": out_dir, "force": args.force, "aspect": args.aspect,
         "voice": args.voice or plan.get("voice") or "",
@@ -1609,7 +2137,7 @@ def cmd_render(args):
     elif stitch and not bad and not args.dry_run:
         name = plan.get("stitch_name") or (stitch if isinstance(stitch, str) else "full")
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", str(name)).strip("-") or "full"
-        stitched, err = stitch_clips(clips, results, out_dir, name)
+        stitched, err = stitch_clips(clips, results, out_dir, name, crossfade=not plan.get("source"))
         if stitched:
             manifest["stitched"] = str(stitched)
             print(f"stitched: {stitched}", file=log)
@@ -1668,8 +2196,53 @@ def cmd_render(args):
     return 0 if not bad else 1
 
 
+def cmd_make(args):
+    """fetch + render + stitch in one call: the cheapest path for an agent."""
+    plan_path = Path(args.plan).expanduser().resolve()
+    try:
+        if not str(json.loads(plan_path.read_text(encoding="utf-8")).get("angle", "x")).strip():
+            print("! `angle` is empty: without one the video is a list of obvious facts. "
+                  "Fill it and rewrite the beats around it.", file=sys.stderr)
+    except (OSError, ValueError):
+        pass   # fetch reports a missing or broken plan properly
+    fetch = ["fetch", str(plan_path), "--sheet", "--from", args.source]
+    if args.music:
+        fetch += ["--music", args.music]
+    main(fetch)   # a beat with nothing found becomes a text beat; not fatal
+    clips_dir = plan_path.parent / "clips"
+    final = clips_dir / "final.mp4"
+    final.unlink(missing_ok=True)   # never report a stale video from an earlier run
+    render = ["render", str(plan_path), "--stitch", "final", "--force", "--brief"]
+    if args.style:
+        render += ["--style", args.style]
+    if args.voice:
+        render += ["--voice", args.voice]
+    code = main(render)
+    if not final.exists():
+        singles = sorted(clips_dir.glob("*.mp4"))
+        if len(singles) != 1:
+            print("! no final video; see the errors above", file=sys.stderr)
+            return 1
+        final = singles[0]
+    if args.out:
+        dest = Path(args.out).expanduser()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(final, dest)
+        final = dest
+    info = probe_media(final)
+    print(f"\nvideo: {final.resolve()}  ({info['duration']:.1f}s, {info['width']}x{info['height']})")
+    if (plan_path.parent / "media" / "sheet.jpg").exists():
+        print(f"check: {plan_path.parent / 'media' / 'sheet.jpg'} (wrong picture? clear that beat's "
+              f"media, change its query, run make again)")
+    return code
+
+
 def cmd_selftest(args):
     """Prove the pipeline works on this machine without touching user files."""
+    assert fmt_value(300e6, 300e6, {}, "es") == "300 millones"
+    assert fmt_value(150e6, 300e6, {}, "es") == "150 millones"   # count-up keeps the final unit
+    assert fmt_value(449.5, 450, {"prefix": "$"}, "es") == "$450"
+    assert fmt_value(2.5e9, 2.5e9, {}, "en") == "2.5B"
     out = Path(args.out or tempfile.mkdtemp(prefix="tc-selftest-")).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     src = out / "source.mp4"
@@ -1697,6 +2270,10 @@ def cmd_selftest(args):
              "script": "", "audio": "source"},
         ],
     }
+    if has_pillow():
+        plan["clips"].append({"name": "selftest-chart", "start": 12, "duration": 4, "script": "",
+                              "chart": {"type": "bar", "title": "Self test", "labels": ["A", "B", "C"],
+                                        "values": [3, 7, 5], "source": "selftest"}})
     plan_path = out / "plan.json"
     plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
     ns = argparse.Namespace(plan=str(plan_path), out=str(out / "clips"), force=True,
@@ -1783,13 +2360,26 @@ def main(argv=None):
     sb.add_argument("--json", action="store_true")
     sb.set_defaults(func=cmd_storyboard)
 
-    fe = sub.add_parser("fetch", help="download freely licensed images for a plan's queries")
+    fe = sub.add_parser("fetch", help="download images/footage for each beat + a music track")
     fe.add_argument("plan")
-    fe.add_argument("--n", type=int, default=2, help="images per clip")
+    fe.add_argument("--n", type=int, default=2, help="visuals per beat (footage counts as one)")
+    fe.add_argument("--from", dest="source", choices=["web", "wiki"], default="web",
+                    help="web: image search ranked by relevance (default); wiki: Wikimedia, free licences only")
     fe.add_argument("--out", default="media", help="folder next to the plan")
     fe.add_argument("--sheet", action="store_true", help="write a contact sheet of the chosen images")
-    fe.add_argument("--music", metavar="QUERY", help="also fetch a freely licensed music track")
+    fe.add_argument("--music", metavar="QUERY",
+                    help="NCS search or URL (default: plan.music_query or 'NCS')")
+    fe.add_argument("--no-music", action="store_true")
     fe.set_defaults(func=cmd_fetch)
+
+    mk = sub.add_parser("make", help="one shot: fetch + render + stitch into a single video")
+    mk.add_argument("plan")
+    mk.add_argument("--out", help="copy the finished video here (file path)")
+    mk.add_argument("--from", dest="source", choices=["web", "wiki"], default="web")
+    mk.add_argument("--music", metavar="QUERY")
+    mk.add_argument("--style", choices=list(STYLE_PRESETS))
+    mk.add_argument("--voice")
+    mk.set_defaults(func=cmd_make)
 
     s = sub.add_parser("sheet", help="timestamped contact sheets")
     s.add_argument("video")
