@@ -46,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "4.2.0"
+VERSION = "4.2.1"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -610,6 +610,14 @@ def write_srt(lines, path):
 
 
 def find_font():
+    """A TrueType font for the charts and the contact sheets.
+
+    Every distro files its font packages differently (liberation-sans against
+    liberation-sans-fonts, noto against google-noto), so the usual names are
+    tried first and then whatever the font packages actually left behind.
+    Without a real font the charts fall back to a bitmap font that cannot
+    spell an accented letter, and the accent turns into a box.
+    """
     candidates = []
     if IS_WIN:
         windir = os.environ.get("WINDIR", r"C:\Windows")
@@ -624,11 +632,49 @@ def find_font():
                       "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
                       "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
                       "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
-                      "/usr/share/fonts/noto/NotoSans-Bold.ttf"]
+                      "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Bold.ttf",
+                      "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+                      "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+                      "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
+                      "/usr/share/fonts/adwaita-sans-fonts/AdwaitaSans-Bold.ttf",
+                      "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"]
     for c in candidates:
         if Path(c).exists():
             return c
+    if not IS_WIN:
+        # no font package where it is usually expected: take what is installed
+        skip = ("emoji", "symbola", "opensymbol", "noto-color", "music", "math")
+        bold, plain = [], []
+        for root in ("/usr/share/fonts", "/usr/local/share/fonts",
+                     str(Path.home() / ".local/share/fonts")):
+            base = Path(root)
+            if not base.is_dir():
+                continue
+            for f in list(base.rglob("*.ttf")) + list(base.rglob("*.otf")):
+                name = f.name.lower()
+                if any(s in name for s in skip):
+                    continue
+                (bold if any(k in name for k in ("bold", "semibold", "black")) else plain).append(str(f))
+        if bold or plain:
+            return (bold or plain)[0]
     return ""
+
+
+def ascii_fallback(text):
+    """Spell a text without the letters a bitmap font cannot draw: no boxes."""
+    import unicodedata
+    return unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode("ascii")
+
+
+def sanitize_text(value):
+    """Every string inside a chart, with the accents removed."""
+    if isinstance(value, str):
+        return ascii_fallback(value)
+    if isinstance(value, list):
+        return [sanitize_text(v) for v in value]
+    if isinstance(value, dict):
+        return {k: sanitize_text(v) for k, v in value.items()}
+    return value
 
 
 def filter_path(path):
@@ -1512,6 +1558,9 @@ def render_chart(chart, width, height, dur, out: Path, lang="es", fps=30):
     W, H = width, height
     u = min(W, H) / 1080          # one design unit; layouts are written for a 1080-wide frame
     font_path = find_font()
+    if not font_path:
+        # no real font: keep the accents out of the picture instead of drawing boxes
+        chart = sanitize_text(chart)
 
     def font(px):
         px = max(10, int(px))
@@ -2433,6 +2482,9 @@ def cmd_selftest(args):
         {"angle": "x", "clips": [{"script": "a"}, {"script": "b"}, {"script": "c"}]}))
     assert not plan_warnings({"angle": "x", "clips": [
         {"script": "a"}, {"script": "b"}, {"script": "¿Lo juegas?"}]})
+    # a chart with no font that can spell it drops the accents instead of drawing boxes
+    assert sanitize_text({"title": "QUÉ RECIBE"})["title"] == "QUE RECIBE"
+    assert sanitize_text(["años", "día"]) == ["anos", "dia"]
     out = Path(args.out or tempfile.mkdtemp(prefix="tc-selftest-")).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     src = out / "source.mp4"

@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.2.1
+
+Charts that spell the accents.
+
+- The font search missed the folders the font packages actually use (`liberation-sans-fonts`, `google-noto`, `adwaita-sans-fonts`), so the charts fell back to a bitmap font and every accented letter came out as an empty box: "QUÉ" became "QU▯". The search now falls back to whatever font is installed, and a machine with no font at all spells the charts without accents instead of drawing boxes.
+- `doctor` reports the font it found.
+
 ## 4.2.0
 
 Captions that punctuate, and a plan that gets checked before it renders.
