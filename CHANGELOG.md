@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.2.0
+
+Captions that punctuate, and a plan that gets checked before it renders.
+
+- Captions keep the punctuation of the script: edge-tts speaks bare words, so every comma and full stop was lost and two sentences shared one line. The script's marks are matched back onto the spoken words (numbers are spoken as words, so they are skipped, never guessed).
+- `make` now checks the plan before it downloads anything and says what is missing: an empty `angle`, fewer than 3 beats, a last beat with no question. A weak model skips exactly those parts.
+- `selftest` covers both.
+
 ## 4.1.0
 
 The good result by default, not only on a machine that happens to be set up.

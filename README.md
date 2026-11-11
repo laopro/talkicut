@@ -75,6 +75,7 @@ The agent researches the topic with its own web tools, writes the narration and 
 - 1080x1920 (or 1:1, 4:5, 16:9), full screen visible over a blurred fill - no UI is cropped away
 - `--aspect auto` keeps a horizontal recording horizontal, scaled straight with no blur
 - burned captions in three presets (`clean`, `tiktok`, `bold`), word-synced when edge-tts is available
+- the script's punctuation on the captions: a full stop ends a caption line, a question mark ends the video
 - a spoken hook on a colour box, then captions where the word being said lights up
 - stereo audio normalized to -16 LUFS, with a silent AAC track when there is no voice
 - `manifest.json`, plus optional `.srt` and `.jpg` per clip
@@ -92,7 +93,7 @@ The agent researches the topic with its own web tools, writes the narration and 
 | `plan` | scaffolds `plan.json` with beats snapped to real cuts, and a character budget per beat |
 | `storyboard` | scaffolds a plan from a prompt, for videos with no source footage |
 | `fetch` | per beat: footage (`video`, yt-dlp) and images (`query`, web search; `--from wiki` for free licences only), plus an NCS track; `--sheet` writes a contact sheet to review them |
-| `make` | `fetch` + `render --stitch` + copy to `--out`: one call from plan to finished video |
+| `make` | `fetch` + `render --stitch` + copy to `--out`: one call from plan to finished video. Checks the plan first: angle, beat count, closing question |
 | `sheet` | contact sheets with timestamps, for vision models |
 | `ocr` | timestamped UI transcript, for models without vision |
 | `render` | plan -> finished clips |

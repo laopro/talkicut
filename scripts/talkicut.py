@@ -46,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "4.1.0"
+VERSION = "4.2.0"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -406,6 +406,39 @@ def proportional_words(text, duration):
         out.append((t, d, w))
         t += d
     return out
+
+
+def _word_key(s):
+    """Letters and digits only, lowercased: what a caption and a script agree on."""
+    return re.sub(r"\W+", "", str(s), flags=re.UNICODE).lower()
+
+
+def restore_punctuation(words, text):
+    """Put the script's punctuation back on the word timings.
+
+    edge-tts hands back bare words ("vendido"), so captions lost every comma and
+    full stop, and two sentences ended up sharing one line. The script still
+    knows where the marks go: match its tokens against the spoken words and
+    re-attach them. Numbers ("300 millones") are spoken as words and never
+    match; they are skipped, never guessed.
+    """
+    if not words or not text:
+        return words
+    marks, wi = {}, 0
+    for tok in re.findall(r"\S+", text):
+        core = re.sub(r"[^\w]+$", "", tok, flags=re.UNICODE)
+        if not core:
+            continue
+        key = _word_key(core)
+        for j in range(wi, min(len(words), wi + 8)):
+            if _word_key(words[j][2]) == key:
+                if tok[len(core):] and not re.search(r"[.!?,;:…\"'»]$", str(words[j][2])):
+                    marks[j] = tok[len(core):]
+                wi = j + 1
+                break
+    if not marks:
+        return words
+    return [(o, d, str(t) + marks.get(i, "")) for i, (o, d, t) in enumerate(words)]
 
 
 def ass_color(hex_color, default="&H00FFFFFF"):
@@ -1923,6 +1956,7 @@ def render_clip(clip, plan, opts, work: Path, index: int):
     if (spoken or title) and opts["captions"] and has_filter("ass"):
         words = (speech.words or proportional_words(spoken, min(speech.duration, dur))) if speech \
             else proportional_words(spoken, dur)
+        words = restore_punctuation(words, spoken)
         hook_words, words = words[:n_hook], words[n_hook:]
         title_end = max(1.2, hook_words[-1][0] + hook_words[-1][1] + 0.3) if hook_words else None
         lines = group_lines(words, style["max_chars"], style["max_words"]) if words else []
@@ -2300,14 +2334,35 @@ def cmd_render(args):
     return 0 if not bad else 1
 
 
+def plan_warnings(plan):
+    """The shape a reel needs, checked before anything is downloaded.
+
+    A weak model skips exactly the parts that make it worth watching: the angle,
+    the number of beats, the question at the end. Say it now, not after the
+    render, and not at all.
+    """
+    out = []
+    clips = [c for c in (plan.get("clips") or []) if isinstance(c, dict)]
+    if not str(plan.get("angle") or "").strip():
+        out.append("`angle` is empty: without one the video is a list of obvious facts. "
+                   "Fill it and rewrite the beats around it.")
+    if len(clips) < 3:
+        out.append(f"only {len(clips)} beat(s): a reel needs 3-6, one idea each")
+    if clips:
+        last = clips[-1]
+        text = f"{last.get('title') or ''} {last.get('script') or last.get('narration') or ''}"
+        if "?" not in text:
+            out.append("the last beat has no question: end with one to the viewer")
+    return out
+
+
 def cmd_make(args):
     """fetch + render + stitch in one call: the cheapest path for an agent."""
     plan_path = Path(args.plan).expanduser().resolve()
     try:
         ensure_deps()
-        if not str(json.loads(plan_path.read_text(encoding="utf-8")).get("angle", "x")).strip():
-            print("! `angle` is empty: without one the video is a list of obvious facts. "
-                  "Fill it and rewrite the beats around it.", file=sys.stderr)
+        for msg in plan_warnings(json.loads(plan_path.read_text(encoding="utf-8"))):
+            print(f"! {msg}", file=sys.stderr)
     except (OSError, ValueError):
         pass   # fetch reports a missing or broken plan properly
     fetch = ["fetch", str(plan_path), "--sheet", "--from", args.source]
@@ -2360,6 +2415,24 @@ def cmd_selftest(args):
     assert fmt_value(150e6, 300e6, {}, "es") == "150 millones"   # count-up keeps the final unit
     assert fmt_value(449.5, 450, {"prefix": "$"}, "es") == "$450"
     assert fmt_value(2.5e9, 2.5e9, {}, "en") == "2.5B"
+    # the punctuation of the script comes back on the words edge-tts spoke
+    said = [("El", 0.0, "El"), ("juego", 0.1, "juego"), ("está", 0.2, "está"),
+            ("muerto", 0.3, "muerto"), ("Ya", 0.4, "Ya"), ("pasó", 0.5, "pasó"),
+            ("Tú", 0.6, "Tú"), ("lo", 0.7, "lo"), ("juegas", 0.8, "juegas")]
+    out = restore_punctuation(said, "El juego está muerto. Ya pasó. ¿Tú lo juegas?")
+    assert [w[2] for w in out] == ["El", "juego", "está", "muerto.", "Ya", "pasó.",
+                                   "Tú", "lo", "juegas?"]
+    # a number is spoken as words: it never matches, and nothing is invented
+    assert [w[2] for w in restore_punctuation([("trescientos", 0, "trescientos"),
+                                               ("millones", 1, "millones")],
+                                              "300 millones vendidos.")] == \
+        ["trescientos", "millones"]
+    # a plan that will not land is called out before anything is downloaded
+    assert any("angle" in w for w in plan_warnings({"clips": []}))
+    assert any("question" in w for w in plan_warnings(
+        {"angle": "x", "clips": [{"script": "a"}, {"script": "b"}, {"script": "c"}]}))
+    assert not plan_warnings({"angle": "x", "clips": [
+        {"script": "a"}, {"script": "b"}, {"script": "¿Lo juegas?"}]})
     out = Path(args.out or tempfile.mkdtemp(prefix="tc-selftest-")).expanduser()
     out.mkdir(parents=True, exist_ok=True)
     src = out / "source.mp4"
