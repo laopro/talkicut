@@ -38,6 +38,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import tempfile
 import urllib.parse
 import urllib.request
@@ -252,12 +253,20 @@ def edge_speak(text, voice, rate_pct, out_dir: Path, tag: str) -> Speech:
                 elif chunk["type"] in ("WordBoundary", "SentenceBoundary"):
                     words.append((chunk["offset"] / 1e7, chunk["duration"] / 1e7, chunk["text"]))
 
-    try:
-        asyncio.run(go())
-    except Exception as exc:  # network down, voice gone, service change...
-        raise TtsUnavailable(f"edge-tts failed: {exc}") from exc
-    if not mp3.exists() or mp3.stat().st_size == 0:
-        raise TtsUnavailable("edge-tts produced no audio")
+    # the service drops a request now and then ("No audio was received"); one hiccup must not
+    # hand a single beat to the robotic fallback voice
+    for attempt in range(3):
+        words.clear()
+        try:
+            asyncio.run(go())
+            if mp3.exists() and mp3.stat().st_size > 0:
+                break
+            failure = "edge-tts produced no audio"
+        except Exception as exc:  # network down, voice gone, service change...
+            failure = f"edge-tts failed: {exc}"
+        if attempt == 2:
+            raise TtsUnavailable(failure)
+        time.sleep(1.5 * (attempt + 1))
     return Speech(mp3, duration_of(mp3), words, "edge", rate_pct)
 
 
@@ -320,7 +329,8 @@ def make_speech(text, engine, voice, lang, clip_dur, out_dir: Path, tag: str) ->
     if cache.with_suffix(".json").exists():
         meta = json.loads(cache.with_suffix(".json").read_text(encoding="utf-8"))
         audio = cache.with_suffix(meta["ext"])
-        if audio.exists():
+        # a fallback voice cached under "auto" would stick forever: always retry the neural one
+        if audio.exists() and not (engine == "auto" and meta["engine"] != "edge"):
             return Speech(audio, meta["duration"], [tuple(w) for w in meta["words"]],
                           meta["engine"], meta.get("rate", 0))
 
@@ -1053,14 +1063,18 @@ def yt_broll(query, dest_dir: Path, stem: str, seconds: float):
                           f"ytsearch6:{query}"], timeout=60)
     if code != 0:
         raise ValueError(err.strip()[:200] or "yt-dlp search failed")
+    found = []
     for line in out.strip().splitlines():
         parts = (line.split("\t") + ["", "", "", ""])[:4]
         try:
             total = float(parts[0])
         except ValueError:
             continue
-        if total < seconds + 20:
-            continue
+        if total >= seconds + 20:
+            found.append((total, parts))
+    # multi-hour uploads are slow to cut from and often fail; titles that match the search win
+    found.sort(key=lambda f: (f[0] > 7200, -token_hits(query, {"title": f[1][2]})))
+    for total, parts in found:
         # past the intro, before the outro: that's where the actual footage is
         start = round(min(max(20.0, total * 0.3), total - seconds - 10), 1)
         target = dest_dir / f"{stem}.mp4"

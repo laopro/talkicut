@@ -53,14 +53,14 @@ Banned: definitions everyone knows, "Hoy hablaremos de", unlinked facts, ending 
 
 | visual | when | example |
 |---|---|---|
-| `"video"` | anything that moves: games, sports, places, products | `"gta v gameplay no commentary 4k"` |
+| `"video"` | anything that moves: games, sports, places, products | `"gta v free roam driving 4k no commentary"` |
 | `"query"` | a specific thing to show | `"nvidia rtx 5090 card"` |
 | `"chart"` | any number, ranking, comparison, trend | below |
 | none | a punchline or quote | big animated text |
 
 - Beat 1 `title` is the spoken hook: `¿Sabías que...` / `Nadie te dijo esto:` / `Lo que no te cuentan:` / `El error que casi todos cometen:` - then its `script` delivers the fact.
 - Mix visuals (footage -> chart -> image); never three photos in a row.
-- Searches in English: concrete nouns + the brand or name.
+- Searches in English: concrete nouns + the brand or name. For games add `free roam` (walkthroughs carry mission subtitles).
 - Write what is said, not what is typed: `Xbox Series X y S`, `19 de noviembre`; no `|`, `/`, `&`, no abbreviations.
 - `voice` sets the accent: `es-MX-JorgeNeural`, `es-AR-TomasNeural`, `es-ES-AlvaroNeural`, `en-US-AndrewNeural`, `pt-BR-AntonioNeural`. Without it, `lang` picks one.
 - Never invent numbers. Every chart value needs a `source`; it is printed on screen.

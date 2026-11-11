@@ -9,6 +9,9 @@ The good result by default, not only on a machine that happens to be set up.
 - Logos and diagrams on a flat background are shown whole instead of being panned or cropped into a slice.
 - `table` charts: taller rows, text sized to its column, centred in the card.
 - `make --tts`.
+- A fallback voice is never served from the cache: the neural voice is tried again on the next run.
+- edge-tts is retried on a dropped request, so one hiccup no longer gives a single beat the offline voice.
+- Footage search prefers results whose title matches and skips multi-hour uploads first.
 - `duration` is optional in topic plans: a beat lasts as long as its narration, so a plan is just `angle` + `clips` with `script` and one visual. `SKILL.md` now teaches writing that plan directly and running `make` once.
 - Captions never straddle two sentences.
 - `make` ends with `voice=..., music=...` and a `!` line for anything that degraded.
