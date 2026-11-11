@@ -1,6 +1,6 @@
 # Videos from a prompt, no footage
 
-`storyboard` → research → `fetch` → `render` builds a complete video when the user gives a topic instead of a file.
+Research → write the plan → `make` builds a complete video when the user gives a topic instead of a file. (`storyboard` can scaffold an empty plan; writing the JSON directly is cheaper.)
 
 The script cannot research and cannot write: **you** are the model. The pipeline only scaffolds beats, downloads freely licensed images, and renders narration + captions + motion.
 
@@ -22,7 +22,7 @@ credits: [
 
 ## 2. Beats
 
-`storyboard "prompt" --beats 5 --seconds 30` splits the duration evenly. Adjust `duration` per beat before writing.
+`duration` is optional: a beat lasts as long as its narration. Set it only to cap a beat. `storyboard "prompt" --beats 5 --seconds 30` pre-fills even durations if you want a fixed runtime.
 
 | Position | Job | Length |
 |---|---|---|
@@ -35,7 +35,7 @@ credits: [
 - 3–6 beats for 20–45 s. More than 6 needs a longer runtime, not faster speech.
 - One idea per beat. If the script needs a comma splice to fit, split the beat.
 - Never restate the `title` number/claim inside that beat's `script` — if the title already says "$450", the caption says what it means, not the same figure again. Repeating a fact reads as padding, not emphasis.
-- 14–16 characters per second; `storyboard` prints the budget at 85% occupancy.
+- 14–16 characters per second: 60–110 characters is a 4–8 s beat.
 - Write for the ear: short sentences, no parentheses, no "como mencioné anteriormente".
 
 ## 3. Visuals per beat
@@ -75,8 +75,7 @@ One visual per beat, picked by what the beat says:
 ## 6. Render and check
 
 ```bash
-python scripts/talkicut.py storyboard "un reel sobre las IA actuales" --beats 4 --seconds 28 --out reel.plan.json
-# fill title (hook), script, and one of video / query / chart per beat
+# write reel.plan.json: angle, lang, voice, clips with title (hook), script, and one of video / query / chart
 python scripts/talkicut.py make reel.plan.json --out ~/Desktop/reel.mp4
 ```
 

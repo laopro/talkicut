@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.1.0
+
+The good result by default, not only on a machine that happens to be set up.
+
+- `make` and `doctor --fix` install the missing pieces themselves (edge-tts, yt-dlp, Pillow); yt-dlp also works when pip left it off `PATH`.
+- Falling back to the offline voice now prints `ROBOTIC OFFLINE VOICE` instead of silently shipping espeak.
+- Logos and diagrams on a flat background are shown whole instead of being panned or cropped into a slice.
+- `table` charts: taller rows, text sized to its column, centred in the card.
+- `make --tts`.
+- `duration` is optional in topic plans: a beat lasts as long as its narration, so a plan is just `angle` + `clips` with `script` and one visual. `SKILL.md` now teaches writing that plan directly and running `make` once.
+- Captions never straddle two sentences.
+- `make` ends with `voice=..., music=...` and a `!` line for anything that degraded.
+- Audio is always stereo: mono narration played on one speaker only in some players (VLC + PipeWire), and the music was being folded to mono.
+
 ## 4.0.0
 
 Videos that hold attention, from one plan and one command.

@@ -45,7 +45,7 @@
 |---|---|---|---|
 | `name` | string | `clip-01` | Becomes the filename. Sanitized: unsafe characters stripped, spaces to dashes. |
 | `start` | number | `0` | Seconds into the source. |
-| `duration` | number | rest of video | Clamped to what is left of the source. On a slideshow it is the maximum: the clip shrinks to the narration length so captions never end before the voice. |
+| `duration` | number | rest of video; with no `source`, the narration length | Clamped to what is left of the source. On a slideshow it is the maximum: the clip shrinks to the narration length so captions never end before the voice. |
 | `media` | array | `[]` | Image or video paths for a slideshow clip; relative paths resolve against the plan. Split evenly over the beat and crossfaded. Stills near the frame's shape get a Ken Burns push, wider ones pan across full-bleed, taller ones sit over a blurred copy; videos are cropped to fill. Empty (and no `chart`) = text beat: animated gradient, captions big in the centre. |
 | `query` | string | `""` | English image search used by `fetch` (web by default, `--from wiki` for Wikimedia only). Ignored by `render`. |
 | `video` | string | `""` | YouTube search used by `fetch`: downloads only `duration`+1 s of real footage from ~30% into the first long-enough result. Counts as one of the `--n` visuals. |

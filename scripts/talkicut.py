@@ -45,7 +45,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "4.0.0"
+VERSION = "4.1.0"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -198,6 +198,43 @@ def edge_available():
         return False
 
 
+def ytdlp_cmd():
+    """yt-dlp as a command prefix: the binary, or the module when pip left it off PATH."""
+    exe = shutil.which("yt-dlp")
+    if exe:
+        return [exe]
+    try:
+        import yt_dlp  # noqa: F401
+        return [sys.executable, "-m", "yt_dlp"]
+    except ImportError:
+        return None
+
+
+def pip_install(pkg):
+    import importlib
+    import site
+    for extra in ([], ["--break-system-packages"]):   # PEP 668 distros refuse the plain form
+        code, _, _ = run([sys.executable, "-m", "pip", "install", "--user", "-q", *extra, pkg], timeout=300)
+        if code == 0:
+            user_site = site.getusersitepackages()
+            if user_site not in sys.path:
+                sys.path.append(user_site)
+            importlib.invalidate_caches()
+            return True
+    return False
+
+
+def ensure_deps():
+    """Install what separates a good video from an ugly one: neural voice, footage + music, charts."""
+    for name, present in (("edge-tts", edge_available), ("yt-dlp", ytdlp_cmd), ("pillow", has_pillow)):
+        if present():
+            continue
+        print(f"installing {name}...", file=sys.stderr)
+        if not pip_install(name) or not present():
+            print(f"  ! could not install {name}: {sys.executable} -m pip install --user {name}",
+                  file=sys.stderr)
+
+
 def edge_speak(text, voice, rate_pct, out_dir: Path, tag: str) -> Speech:
     import asyncio
 
@@ -311,6 +348,10 @@ def make_speech(text, engine, voice, lang, clip_dur, out_dir: Path, tag: str) ->
                 if not system_tts_available():
                     raise TtsUnavailable("no offline TTS found")
                 sp = system_speak(text, voice, lang, out_dir, tag)
+                if engine == "auto":
+                    print(f"  ! ROBOTIC OFFLINE VOICE in use ({last or 'edge-tts unavailable'}). "
+                          "Run `talkicut doctor --fix` and check the network before delivering this video.",
+                          file=sys.stderr)
                 if sp.duration > clip_dur - 0.3:
                     print(f"  ! voice {sp.duration:.1f}s does not fit clip {clip_dur:.1f}s "
                           f"(system TTS cannot be sped up); tail gets cut")
@@ -395,7 +436,9 @@ def group_lines(words, max_chars=30, max_words=6):
     lines, cur = [], []
     for w in words:
         cur.append(w)
-        if len(" ".join(c[2] for c in cur)) >= max_chars or len(cur) >= max_words:
+        # a caption never straddles two sentences: "...y S. La versión" reads as one thought
+        ends_sentence = bool(re.search(r"[.!?\u2026][\"'\u00bb)]*$", str(w[2])))
+        if ends_sentence or len(" ".join(c[2] for c in cur)) >= max_chars or len(cur) >= max_words:
             lines.append(cur)
             cur = []
     if cur:
@@ -599,21 +642,19 @@ def cmd_doctor(args):
     add("offline-tts", sys_tts, f"{detail}: {'found' if sys_tts else 'missing'} (no internet needed)",
         "Windows/macOS: built in | Debian/Ubuntu: sudo apt install espeak-ng")
 
-    add("yt-dlp", bool(shutil.which("yt-dlp")), "for `video` footage and NCS music",
+    add("yt-dlp", bool(ytdlp_cmd()), "for `video` footage and NCS music",
         "pip install yt-dlp")
     add("pillow", has_pillow(), "for `chart` beats", "pip install pillow")
     add("tesseract", bool(shutil.which("tesseract")), "optional, for OCR of frames",
         "Windows: winget install UB-Mannheim.TesseractOCR | macOS: brew install tesseract | "
         "Linux: sudo apt install tesseract-ocr")
 
-    if args.fix and not edge_available():
-        print("installing edge-tts...")
-        code, out, err = run([sys.executable, "-m", "pip", "install", "--user", "-q", "edge-tts"],
-                             timeout=300)
-        print(out.strip() or err.strip() or ("installed" if code == 0 else f"failed ({code})"))
+    if args.fix:
+        ensure_deps()
+        state = {"edge-tts": edge_available(), "yt-dlp": bool(ytdlp_cmd()), "pillow": has_pillow()}
         for c in checks:
-            if c["check"] == "edge-tts":
-                c["ok"], c["detail"] = edge_available(), "installed"
+            if state.get(c["check"]) and not c["ok"]:
+                c["ok"], c["detail"] = True, "installed"
 
     ok_count = sum(1 for c in checks if c["ok"])
     # only these gate a render: voice and OCR are optional by design
@@ -1005,9 +1046,9 @@ def web_images(query, limit):
 
 def yt_broll(query, dest_dir: Path, stem: str, seconds: float):
     """Download only a few seconds of real footage for a beat. Returns (path, meta)."""
-    if not shutil.which("yt-dlp"):
+    if not ytdlp_cmd():
         raise ValueError("yt-dlp not installed (pip install yt-dlp)")
-    code, out, err = run(["yt-dlp", "--flat-playlist", "--print",
+    code, out, err = run([*ytdlp_cmd(), "--flat-playlist", "--print",
                           "%(duration)s\t%(webpage_url)s\t%(title)s\t%(channel)s",
                           f"ytsearch6:{query}"], timeout=60)
     if code != 0:
@@ -1024,7 +1065,7 @@ def yt_broll(query, dest_dir: Path, stem: str, seconds: float):
         start = round(min(max(20.0, total * 0.3), total - seconds - 10), 1)
         target = dest_dir / f"{stem}.mp4"
         target.unlink(missing_ok=True)
-        code, _, err = run(["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
+        code, _, err = run([*ytdlp_cmd(), "--no-playlist", "--quiet", "--no-warnings",
                             "-f", "bv*[height<=1080][ext=mp4]/bv*[height<=1080]/b[height<=1080]",
                             "--download-sections", f"*{start}-{start + seconds + 0.5}",
                             "--remux-video", "mp4", "-o", str(target), parts[1]], timeout=240)
@@ -1117,7 +1158,7 @@ def cmd_fetch(args):
         if video_q:
             try:
                 path, meta = yt_broll(video_q, media_dir, f"{name}-v",
-                                      float(clip.get("duration") or 6) + 1.0)
+                                      beat_seconds(clip) + 1.0)
                 got.append(rel(path))
                 credits.append({"clip": name, **meta})
             except (OSError, ValueError) as exc:
@@ -1287,6 +1328,21 @@ def cmd_verify(args):
         print(f"{r['file'][:38]:<38} {r['duration']:>7.1f} {r['size']:>11} {db:>7}  {status}")
     print(f"\n{len(rows)} clips, {problems_total} problem(s)")
     return 0 if problems_total == 0 else 1
+
+
+def beat_seconds(clip):
+    """A beat with no `duration` gets room for its words at an unhurried pace.
+
+    Topic videos then trim each beat to its real voice length, so this is a ceiling, not a target.
+    """
+    try:
+        given = float(clip.get("duration") or 0)
+    except (TypeError, ValueError):
+        given = 0.0
+    if given > 0:
+        return given
+    words = f"{clip.get('title') or ''} {clip.get('script') or clip.get('narration') or ''}".strip()
+    return round(max(4.0, len(words) / 12 + 1.5), 1)
 
 
 def load_plan(path):
@@ -1542,10 +1598,10 @@ def render_chart(chart, width, height, dur, out: Path, lang="es", fps=30):
         xs = [mx]
         for w_ in widths[:-1]:
             xs.append(xs[-1] + (W - 2 * mx) * w_ / total)
-        row_h = min(int(130 * u), (area_bot - area_top) / (len(rows) + 1))
-        fsize = min(50 * u, row_h * 0.4)
+        row_h = min(int(160 * u), (area_bot - area_top) / (len(rows) + 1))
+        fsize = min(60 * u, row_h * 0.4, (W - 2 * mx) / total / 0.56)
         hf, cf = font(fsize * 0.85), font(fsize)
-        y = area_top
+        y = area_top + max(0, (area_bot - area_top - row_h * (len(rows) + 1)) * 0.35)
         for c, name in enumerate(cols):
             d.text((xs[c] + int(12 * u), y + row_h / 2), name.upper(), font=hf, fill=PALETTE["muted"], anchor="lm")
         d.rectangle([mx, y + row_h - int(4 * u), W - mx, y + row_h], fill=PALETTE["accent"])
@@ -1593,6 +1649,28 @@ def render_chart(chart, width, height, dur, out: Path, lang="es", fps=30):
     return None
 
 
+def flat_graphic(path):
+    """A logo or diagram on a flat background: cropping or panning it shows a meaningless slice.
+
+    Returns that background colour (0xRRGGBB) so the frame can be extended with it, else None.
+    """
+    try:
+        from PIL import Image, ImageStat
+        with Image.open(path) as im:
+            small = im.convert("RGB").resize((64, 64))
+        ring = Image.new("RGB", (64 * 4, 1))
+        for k, box in enumerate(((0, 0, 64, 1), (0, 63, 64, 64))):
+            ring.paste(small.crop(box), (64 * k, 0))
+        for k, box in enumerate(((0, 0, 1, 64), (63, 0, 64, 64))):
+            ring.paste(small.crop(box).rotate(90, expand=True), (64 * (k + 2), 0))
+        stat = ImageStat.Stat(ring)
+        if max(stat.stddev) >= 12:
+            return None
+        return "0x%02x%02x%02x" % tuple(int(v) for v in stat.mean)
+    except Exception:
+        return None
+
+
 def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur", lang="es"):
     """Beat visuals: animated chart, real footage, or stills with Ken Burns / pans, crossfaded."""
     media = [Path(p) for p in (clip.get("media") or []) if Path(p).exists()]
@@ -1627,10 +1705,16 @@ def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur", la
     frames = max(2, int(round(seg * fps)))
     blur = ",boxblur=24:2" if has_filter("boxblur") else ""
 
+    flat = {}
+
     def frame_mode(img):
         """auto: near the frame's shape -> fill it; wider -> pan across it full-bleed; taller -> blur."""
         if fit != "auto":
             return fit
+        if img.suffix.lower() not in VIDEO_EXTS:
+            flat[img] = flat_graphic(img)
+            if flat[img]:
+                return "flat"   # whole logo, its own background colour extended to the frame
         try:
             dims = probe_media(img)
             ar = dims["width"] / dims["height"] if dims["height"] else 0
@@ -1678,7 +1762,12 @@ def build_broll(clip, width, height, dur, work: Path, index: int, fit="blur", la
         else:
             px, py = "(iw-iw/zoom)/2", f"(ih-ih/zoom)*(1-on/{frames})"
 
-        if cover:
+        if mode == "flat":
+            cw = int(width * 1.1) // 2 * 2
+            ch = int(height * 1.1) // 2 * 2
+            base = (f"[{i}:v]scale={cw}:{ch}:force_original_aspect_ratio=decrease,"
+                    f"pad={cw}:{ch}:(ow-iw)/2:(oh-ih)/2:color={flat[img]}")
+        elif cover:
             cw = int(width * 1.16) // 2 * 2
             ch = int(height * 1.16) // 2 * 2
             base = (f"[{i}:v]scale={cw}:{ch}:force_original_aspect_ratio=increase,"
@@ -1726,7 +1815,7 @@ def render_clip(clip, plan, opts, work: Path, index: int):
     info = opts["info"]
     src_dur = info["duration"]
     start = max(0.0, float(clip.get("start") or 0))
-    dur = float(clip.get("duration") or 0) or (src_dur - start)
+    dur = float(clip.get("duration") or 0) or (src_dur - start if plan.get("source") else beat_seconds(clip))
     if plan.get("source"):
         dur = round(min(dur, src_dur - start), 3)
     else:
@@ -1859,7 +1948,7 @@ def render_clip(clip, plan, opts, work: Path, index: int):
     cmd = [FFMPEG, "-hide_banner", "-v", "error", "-y", *inputs,
            "-filter_complex", graph, "-map", "[v]", "-map", "[aout]",
            "-t", f"{dur}", "-c:v", "libx264", "-preset", opts["preset"], "-crf", str(opts["crf"]),
-           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
+           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"]
     if opts["fps"]:
         cmd += ["-r", str(opts["fps"])]
     cmd += ["-movflags", "+faststart", str(out_path)]
@@ -1927,7 +2016,7 @@ def stitch_clips(clips, results, out_dir: Path, name: str, crossfade=False):
                                 "-filter_complex", ";".join(chains),
                                 "-map", f"[{vprev}]", "-map", f"[{aprev}]",
                                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                                "-pix_fmt", "yuv420p", "-c:a", "aac",
+                                "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "2",
                                 "-movflags", "+faststart", str(out)])
             if code == 0 and out.exists():
                 return out, None
@@ -1959,18 +2048,18 @@ def yt_music(query_or_url, dest_dir: Path, stem="music"):
     first for the words, which is routinely a copyrighted upload with a misleading
     title. An explicit URL is trusted as-is: the caller picked that exact track.
     """
-    if not shutil.which("yt-dlp"):
+    if not ytdlp_cmd():
         raise ValueError("yt-dlp not installed (pip install yt-dlp)")
     dest_dir.mkdir(parents=True, exist_ok=True)
     if query_or_url.startswith(("http://", "https://")):
         target = query_or_url
-        code, out, err = run(["yt-dlp", "--no-playlist", "--print",
+        code, out, err = run([*ytdlp_cmd(), "--no-playlist", "--print",
                               "%(title)s\t%(uploader)s\t%(webpage_url)s", target])
         if code != 0:
             raise ValueError(err.strip()[:200] or "yt-dlp lookup failed")
         title, uploader, page = (out.strip().split("\t") + ["", "", ""])[:3]
     else:
-        code, out, err = run(["yt-dlp", "--flat-playlist", "--no-playlist", "--print",
+        code, out, err = run([*ytdlp_cmd(), "--flat-playlist", "--no-playlist", "--print",
                               "%(uploader)s\t%(title)s\t%(webpage_url)s\t%(duration)s",
                               f"ytsearch12:{query_or_url}"])
         if code != 0:
@@ -1992,7 +2081,7 @@ def yt_music(query_or_url, dest_dir: Path, stem="music"):
         uploader, title, page = match[0], match[1], match[2]
         target = page
     pattern = str(dest_dir / f"{stem}.%(ext)s")
-    code, _, err = run(["yt-dlp", "--no-playlist", "-x", "--audio-format", "mp3",
+    code, _, err = run([*ytdlp_cmd(), "--no-playlist", "-x", "--audio-format", "mp3",
                         "--audio-quality", "5", "-o", pattern, target])
     if code != 0:
         raise ValueError(err.strip()[:200] or "yt-dlp download failed")
@@ -2012,11 +2101,12 @@ def add_music(video: Path, music: Path, volume=0.08):
     fade_out = max(0.0, dur - 1.6)
     graph = (f"[1:a]volume={volume},afade=t=in:st=0:d=0.7,"
              f"afade=t=out:st={fade_out:.2f}:d=1.6[m];"
-             f"[0:a][m]amix=inputs=2:duration=first:normalize=0[a]")
+             f"[0:a]aformat=channel_layouts=stereo[v0];"
+             f"[v0][m]amix=inputs=2:duration=first:normalize=0[a]")
     code, _, err = run([FFMPEG, "-hide_banner", "-v", "error", "-y", "-i", str(video),
                         "-stream_loop", "-1", "-i", str(music), "-filter_complex", graph,
                         "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
-                        "-b:a", "192k", "-movflags", "+faststart", "-shortest", str(tmp)])
+                        "-b:a", "192k", "-ac", "2", "-movflags", "+faststart", "-shortest", str(tmp)])
     if code != 0:
         print(f"  ! music failed on {video.name}: {err.strip()[:200]}", file=sys.stderr)
         if tmp.exists():
@@ -2097,7 +2187,7 @@ def cmd_render(args):
         print(f"source: {plan['source']} ({info['duration']:.1f}s, "
               f"{info['width']}x{info['height']})", file=log)
     else:
-        print(f"source: slideshow ({len(clips)} beats, images only)", file=log)
+        print(f"source: none ({len(clips)} beats built from the plan's visuals)", file=log)
     plan_aspect = resolve_aspect(plan.get("aspect") or opts["aspect"], info)
     print(f"out:    {out_dir}  ({len(clips)} clips, aspect {plan_aspect})", file=log)
 
@@ -2200,6 +2290,7 @@ def cmd_make(args):
     """fetch + render + stitch in one call: the cheapest path for an agent."""
     plan_path = Path(args.plan).expanduser().resolve()
     try:
+        ensure_deps()
         if not str(json.loads(plan_path.read_text(encoding="utf-8")).get("angle", "x")).strip():
             print("! `angle` is empty: without one the video is a list of obvious facts. "
                   "Fill it and rewrite the beats around it.", file=sys.stderr)
@@ -2217,6 +2308,8 @@ def cmd_make(args):
         render += ["--style", args.style]
     if args.voice:
         render += ["--voice", args.voice]
+    if args.tts:
+        render += ["--tts", args.tts]
     code = main(render)
     if not final.exists():
         singles = sorted(clips_dir.glob("*.mp4"))
@@ -2230,7 +2323,17 @@ def cmd_make(args):
         shutil.copy2(final, dest)
         final = dest
     info = probe_media(final)
-    print(f"\nvideo: {final.resolve()}  ({info['duration']:.1f}s, {info['width']}x{info['height']})")
+    try:
+        man = json.loads((clips_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        man = {}
+    voices = sorted({str(c["voice"]) for c in man.get("clips", []) if c.get("voice")})
+    print(f"\nvideo: {final.resolve()}  ({info['duration']:.1f}s, {info['width']}x{info['height']}, "
+          f"voice={'+'.join(voices) or 'none'}, music={'yes' if man.get('music') else 'NO'})")
+    if voices != ["edge"] and args.tts in (None, "auto", "edge"):
+        print("! not the neural voice: `doctor --fix`, check the network, `make` again", file=sys.stderr)
+    if not man.get("music"):
+        print("! no music: see the fetch errors above (`doctor --fix` installs yt-dlp)", file=sys.stderr)
     if (plan_path.parent / "media" / "sheet.jpg").exists():
         print(f"check: {plan_path.parent / 'media' / 'sheet.jpg'} (wrong picture? clear that beat's "
               f"media, change its query, run make again)")
@@ -2324,7 +2427,7 @@ def main(argv=None):
 
     d = sub.add_parser("doctor", help="check this machine and say what to install")
     d.add_argument("--json", action="store_true")
-    d.add_argument("--fix", action="store_true", help="install edge-tts if missing")
+    d.add_argument("--fix", action="store_true", help="install edge-tts, yt-dlp and pillow if missing")
     d.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("probe", help="inspect a video: duration, audio, scene cuts")
@@ -2379,6 +2482,7 @@ def main(argv=None):
     mk.add_argument("--music", metavar="QUERY")
     mk.add_argument("--style", choices=list(STYLE_PRESETS))
     mk.add_argument("--voice")
+    mk.add_argument("--tts", choices=["auto", "edge", "system", "none"])
     mk.set_defaults(func=cmd_make)
 
     s = sub.add_parser("sheet", help="timestamped contact sheets")

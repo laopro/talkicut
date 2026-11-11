@@ -4,7 +4,7 @@
 
 A screen recording with no audio track is the modern silent film: no transcript, nothing for an AI clipper to select. talkicut reads the recording, helps you choose the beats, writes nothing for you, speaks the narration you wrote, and burns word-synced captions into a 9:16 clip.
 
-No footage? Give it a topic. `storyboard` scaffolds the beats, `make` pulls real footage (YouTube) and images (web search) for each beat, draws animated charts from the data you give it, adds NCS music, and renders one narrated, crossfaded video with a spoken hook and word-by-word captions.
+No footage? Give it a topic. The agent writes a small plan, `make` pulls real footage (YouTube) and images (web search) for each beat, draws animated charts from the data you give it, adds NCS music, and renders one narrated, crossfaded video with a spoken hook and word-by-word captions.
 
 Plain Python + ffmpeg. No API keys, no accounts, no cloud. Works on Windows, macOS and Linux, under any agent that can run a shell, with any model - including models that cannot see images.
 
@@ -37,7 +37,7 @@ Or copy the folder anywhere and point your agent's skill directory at it:
 ./install.sh ~/.claude/skills
 ```
 
-Requirements: Python 3.9+ and `ffmpeg`/`ffprobe` with `libass`, `boxblur` and `loudnorm`. Optional: [`edge-tts`](https://github.com/rany2/edge-tts) for the good voices (`doctor --fix` installs it); without it, the OS voice is used offline.
+Requirements: Python 3.9+ and `ffmpeg`/`ffprobe` with `libass`, `boxblur` and `loudnorm`. [`edge-tts`](https://github.com/rany2/edge-tts) (the good voices), `yt-dlp` (footage, music) and Pillow (charts) are installed by `make` and `doctor --fix` when missing; without edge-tts, the robotic OS voice is used offline.
 
 > macOS note: Homebrew's `ffmpeg` 9 build ships without `libass`, so captions are skipped (with a warning). Use a full build - a static one from evermeet.cx, or any tap that bundles libass - if you want burned captions. Everything else renders fine with the Homebrew build.
 
@@ -61,8 +61,8 @@ python scripts/talkicut.py verify clips            # catch the silent failures
 With no recording at all:
 
 ```bash
-python scripts/talkicut.py storyboard "un reel sobre las IA actuales" --beats 4 --seconds 28 --out reel.plan.json
-# fill: title (spoken hook), script, and one of video / query / chart per beat
+cp assets/topic.plan.example.json reel.plan.json   # or: storyboard "tema" --out reel.plan.json
+# edit: angle, title (spoken hook), script, and one of video / query / chart per beat
 python scripts/talkicut.py make reel.plan.json --out reel.mp4   # fetch + render + crossfade + music
 ```
 
@@ -76,7 +76,7 @@ The agent researches the topic with its own web tools, writes the narration and 
 - `--aspect auto` keeps a horizontal recording horizontal, scaled straight with no blur
 - burned captions in three presets (`clean`, `tiktok`, `bold`), word-synced when edge-tts is available
 - a spoken hook on a colour box, then captions where the word being said lights up
-- audio normalized to -16 LUFS, with a silent AAC track when there is no voice
+- stereo audio normalized to -16 LUFS, with a silent AAC track when there is no voice
 - `manifest.json`, plus optional `.srt` and `.jpg` per clip
 - `--stitch` joins the clips in plan order into one file: a full-video edit with the same encode
 - prompt-only reels: real footage, full-bleed pans and Ken Burns over web images, animated counter / bar / line / table charts, crossfades inside and between beats, beats that last exactly as long as the narration, and `credits.txt` with every source
