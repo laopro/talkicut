@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.3.0
+
+Seventeen things two real renders got wrong, fixed.
+
+- Footage: a second `make` reuses the clip and the music it already downloaded; videos too short to cut from are skipped; news, lives and reactions rank last; a channel logo in a top corner sends the search to the next result and is reported; `credits.txt` says which seconds were used.
+- Captions: the full stop after a number, a date or a rewritten name is kept; `S.`, `EE.UU.` and `Dr.` no longer end a line; a script the voice drifted away from is reported.
+- Charts: the final figure is on screen for the last second instead of a count-up caught midway; a long title shrinks before it is cut, and a cut one says so with `...`.
+- Fonts: only a font that really has the accented letters is used, and `doctor` says what a missing font costs.
+- `make` ends with `audio=stereo -16.x LUFS`, repeats the plan warnings on stdout, and flags sound that is off target.
+- Plans: no reel warnings for an edit of a recording; a closing question in the chart title counts; missing media is reported instead of silently turning into a text beat, and `fetch` downloads it again.
+- `beat_seconds` and `references/narration.md` agree on 14 characters per second.
+
 ## 4.2.1
 
 Charts that spell the accents.

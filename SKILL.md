@@ -28,7 +28,7 @@ You research and write one small JSON plan; one command renders the finished vid
 
 2. `T make v.plan.json --out ~/video.mp4`
 
-`make` does the rest: installs anything missing (neural voice, yt-dlp, Pillow), downloads the visuals and an NCS track, speaks, captions, crossfades. Its last line must read `voice=edge, music=yes`; a `!` line says what to fix. A `!` line before it means the plan will not land: no `angle`, fewer than 3 beats, or no closing question. Then open `media/sheet.jpg` once: wrong picture -> delete that beat's `media`, change its `query`, `make` again.
+`make` does the rest: installs anything missing (neural voice, yt-dlp, Pillow), downloads the visuals and an NCS track, speaks, captions, crossfades. Its last line must read `voice=edge, music=yes, audio=stereo -16 LUFS` (give or take 2); every `!` line says what to fix. A `!` line before it means the plan will not land: no `angle`, fewer than 3 beats, or no closing question. Then open `media/sheet.jpg` once: wrong picture -> delete that beat's `media`, change its `query`, `make` again. A second `make` only downloads what changed: beats that kept their `media`, the same footage search and the music are reused.
 
 Defaults you do not write: 9:16, each beat as long as its voice, hook spoken on beat 1, music, stereo -16 LUFS. Optional: `"aspect": "16:9"`, `"music_query": "NCS chill"`, per-clip `"name"`, `"duration"` (a maximum).
 
@@ -96,6 +96,9 @@ Say what happens on screen in each beat: that sentence is the narration. Details
 | `music=NO` / `no footage` | `T doctor --fix` (yt-dlp), or make the search more concrete |
 | beat renders as text, no picture | its search found nothing: rewrite `query`/`video` with concrete English nouns |
 | wrong / watermarked picture | delete that beat's `media`, change `query`, `make` again |
+| `channel logo in a top corner`, or the footage has its own subtitles | news, lives and reactions carry them: delete that beat's `media` and search `b-roll`, `cinematic`, `drone` or `free roam` instead |
+| chart shows boxes or no accents | no usable font: `T doctor` names it; install DejaVu or Liberation |
+| `media not found` | the plan folder was moved: `make` again fetches it |
 | `filter ass missing` | install a full ffmpeg build (captions need libass) |
 | chart failed | `values` must be numbers |
 

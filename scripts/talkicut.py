@@ -46,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-VERSION = "4.2.1"
+VERSION = "4.3.0"
 TOOL = "talkicut"
 IS_WIN = os.name == "nt"
 IS_MAC = sys.platform == "darwin"
@@ -419,23 +419,41 @@ def restore_punctuation(words, text):
     edge-tts hands back bare words ("vendido"), so captions lost every comma and
     full stop, and two sentences ended up sharing one line. The script still
     knows where the marks go: match its tokens against the spoken words and
-    re-attach them. Numbers ("300 millones") are spoken as words and never
-    match; they are skipped, never guessed.
+    re-attach them. A token the voice spells differently ("300." -> "trescientos",
+    "19", "X|S") never matches; its mark goes on the last word spoken before the
+    next match, which is where that token ended.
     """
     if not words or not text:
         return words
-    marks, wi = {}, 0
+    marks, wi, pending, matched, total = {}, 0, "", 0, 0
+
+    def put(idx, mark):
+        if 0 <= idx < len(words) and mark and idx not in marks \
+                and not re.search(r"[.!?,;:…\"'»]$", str(words[idx][2])):
+            marks[idx] = mark
+
     for tok in re.findall(r"\S+", text):
         core = re.sub(r"[^\w]+$", "", tok, flags=re.UNICODE)
         if not core:
             continue
-        key = _word_key(core)
-        for j in range(wi, min(len(words), wi + 8)):
-            if _word_key(words[j][2]) == key:
-                if tok[len(core):] and not re.search(r"[.!?,;:…\"'»]$", str(words[j][2])):
-                    marks[j] = tok[len(core):]
-                wi = j + 1
-                break
+        total += 1
+        key, tail = _word_key(core), tok[len(core):]
+        # a short common word ("de", "la") must not jump far ahead; a long one can resync
+        reach = 6 if len(key) <= 3 else 24
+        hit = next((j for j in range(wi, min(len(words), wi + reach))
+                    if _word_key(words[j][2]) == key), None)
+        if hit is None:
+            pending = tail or pending
+            continue
+        put(hit - 1, pending)
+        pending = ""
+        put(hit, tail)
+        wi = hit + 1
+        matched += 1
+    put(len(words) - 1, pending)
+    if total >= 6 and matched < total * 0.5:
+        print(f"  ! captions: the voice and the script drifted apart, some punctuation is missing "
+              f"(\"{text[:40]}...\")", file=sys.stderr)
     if not marks:
         return words
     return [(o, d, str(t) + marks.get(i, "")) for i, (o, d, t) in enumerate(words)]
@@ -474,14 +492,29 @@ STYLE_PRESETS = {
 CJK_LANGS = {"ja", "zh", "ko", "th"}
 
 
+ABBREVIATIONS = {"sr", "sra", "srta", "dr", "dra", "ud", "uds", "vs", "aprox", "mr", "mrs", "ms", "st", "jr"}
+
+
+def ends_sentence(token):
+    """A full stop, unless it belongs to an abbreviation: "S.", "EE.UU.", "Dr."."""
+    m = re.search(r"([.!?\u2026])[\"'\u00bb)]*$", str(token))
+    if not m:
+        return False
+    if m.group(1) != ".":
+        return True
+    core = re.sub(r"[\"'\u00bb).]+$", "", str(token)).lstrip("\"'\u00ab(\u00bf\u00a1")
+    if "." in core or (len(core) == 1 and core.isalpha() and core.isupper()):
+        return False
+    return core.lower() not in ABBREVIATIONS
+
+
 def group_lines(words, max_chars=30, max_words=6):
     """Split word timings into caption lines that fit a 9:16 frame."""
     lines, cur = [], []
     for w in words:
         cur.append(w)
         # a caption never straddles two sentences: "...y S. La versión" reads as one thought
-        ends_sentence = bool(re.search(r"[.!?\u2026][\"'\u00bb)]*$", str(w[2])))
-        if ends_sentence or len(" ".join(c[2] for c in cur)) >= max_chars or len(cur) >= max_words:
+        if ends_sentence(w[2]) or len(" ".join(c[2] for c in cur)) >= max_chars or len(cur) >= max_words:
             lines.append(cur)
             cur = []
     if cur:
@@ -609,7 +642,33 @@ def write_srt(lines, path):
 # ------------------------------------------------------------------------- fonts/os
 
 
+def font_covers(path, sample="áéíóúñÑü¿¡"):
+    """False when the font draws its "missing glyph" box for an accented letter."""
+    try:
+        from PIL import ImageFont
+    except ImportError:
+        return True   # cannot check without Pillow; charts need Pillow anyway
+    try:
+        font = ImageFont.truetype(str(path), 40)
+        blank = font.getmask("\uffff")
+        box = (blank.size, bytes(blank))
+        return all((m.size, bytes(m)) != box for m in (font.getmask(ch) for ch in sample))
+    except Exception:
+        return False
+
+
+_FONT = None
+
+
 def find_font():
+    """The font path, looked up once per run."""
+    global _FONT
+    if _FONT is None:
+        _FONT = _find_font()
+    return _FONT
+
+
+def _find_font():
     """A TrueType font for the charts and the contact sheets.
 
     Every distro files its font packages differently (liberation-sans against
@@ -639,11 +698,16 @@ def find_font():
                       "/usr/share/fonts/adwaita-sans-fonts/AdwaitaSans-Bold.ttf",
                       "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"]
     for c in candidates:
-        if Path(c).exists():
+        if Path(c).exists() and font_covers(c):
             return c
     if not IS_WIN:
-        # no font package where it is usually expected: take what is installed
-        skip = ("emoji", "symbola", "opensymbol", "noto-color", "music", "math")
+        # no font package where it is usually expected: take what is installed, text families
+        # first, and only a font that really has the accented letters (CJK, symbol and
+        # script fonts draw a box for them without saying so)
+        skip = ("emoji", "symbol", "noto-color", "music", "math", "cjk", "stix", "dingbat",
+                "icon", "awesome", "braille", "abyssinica", "mono")
+        family = ("sans", "dejavu", "liberation", "noto", "free", "adwaita", "arial",
+                  "roboto", "ubuntu", "cantarell", "inter", "helvet")
         bold, plain = [], []
         for root in ("/usr/share/fonts", "/usr/local/share/fonts",
                      str(Path.home() / ".local/share/fonts")):
@@ -655,8 +719,11 @@ def find_font():
                 if any(s in name for s in skip):
                     continue
                 (bold if any(k in name for k in ("bold", "semibold", "black")) else plain).append(str(f))
-        if bold or plain:
-            return (bold or plain)[0]
+        ranked = sorted(bold, key=lambda f: not any(k in Path(f).name.lower() for k in family)) + \
+            sorted(plain, key=lambda f: not any(k in Path(f).name.lower() for k in family))
+        for f in ranked[:40]:
+            if font_covers(f):
+                return f
     return ""
 
 
@@ -720,7 +787,8 @@ def cmd_doctor(args):
 
     font = find_font()
     add("font", bool(font), font or "none found", "install a TrueType font "
-        "(DejaVu/Liberation on Linux); only affects sheet timestamps")
+        "(DejaVu/Liberation on Linux): without one, chart text loses its accents "
+        "and burned captions may not render")
 
     add("edge-tts", edge_available(),
         "installed" if edge_available() else "not installed (needs internet, best quality)",
@@ -1133,8 +1201,73 @@ def web_images(query, limit):
     return found
 
 
+NOISY_TITLES = ("news", "noticia", "noticiero", "en vivo", "live", "reaction", "reaccion",
+                "reacción", "podcast", "interview", "entrevista", "subtitulado", "subtitles",
+                "sub español", "sub espanol")
+
+
+def corner_overlay(path):
+    """True when a top corner holds something that never moves while the picture does.
+
+    That is a channel logo or a watermark: it signs the video with somebody else's name.
+    Needs Pillow; says False without it.
+    """
+    try:
+        from PIL import Image, ImageChops, ImageFilter
+    except ImportError:
+        return False
+    w, h, n = 320, 180, 6
+    tmp = Path(tempfile.mkdtemp(prefix="tc-overlay-"))
+    try:
+        dur = max(1.0, duration_of(path))
+        run([FFMPEG, "-hide_banner", "-v", "error", "-y", "-i", str(path),
+             "-vf", f"fps={n / dur:.4f},scale={w}:{h},format=gray", "-frames:v", str(n),
+             str(tmp / "f%02d.png")], timeout=60)
+        frames = []
+        for f in sorted(tmp.glob("f*.png")):
+            with Image.open(f) as im:
+                frames.append(im.convert("L"))
+        if len(frames) < 4:
+            return False
+        lo = hi = frames[0]
+        for f in frames[1:]:
+            lo, hi = ImageChops.darker(lo, f), ImageChops.lighter(hi, f)
+        spread = ImageChops.difference(hi, lo)
+        if sum(spread.histogram()[25:]) < 0.35 * w * h:
+            return False   # a still picture: nothing to tell a logo apart from
+        still = spread.point(lambda v: 255 if v <= 12 else 0)
+        marks = still
+        for f in (frames[0], frames[-1]):   # the same outline at both ends of the clip
+            edges = f.filter(ImageFilter.FIND_EDGES).point(lambda v: 255 if v >= 60 else 0)
+            marks = ImageChops.multiply(marks, edges)
+        bw, bh, pad = int(w * 0.26), int(h * 0.22), 3
+        # top corners only: that is where channels sign their videos; the bottom ones hold
+        # game minimaps and car bonnets, which are part of the picture
+        for box in ((pad, pad, bw, bh), (w - bw, pad, w - pad, bh)):
+            crop = marks.crop(box)
+            bbox = crop.getbbox()
+            if not bbox or bbox[2] - bbox[0] < 8 or bbox[3] - bbox[1] < 3:
+                continue
+            if crop.histogram()[255] >= 0.008 * crop.size[0] * crop.size[1]:
+                return True
+        return False
+    except Exception:
+        return False
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def yt_broll(query, dest_dir: Path, stem: str, seconds: float):
     """Download only a few seconds of real footage for a beat. Returns (path, meta)."""
+    target = dest_dir / f"{stem}.mp4"
+    note = dest_dir / f"{stem}.json"
+    try:   # the same search for the same beat: reuse the file, do not download it again
+        kept = json.loads(note.read_text(encoding="utf-8"))
+        if kept.get("query") == query and kept.get("seconds", 0) >= seconds - 0.5 \
+                and target.exists() and target.stat().st_size > 50_000:
+            return target, kept["meta"]
+    except (OSError, ValueError, KeyError):
+        pass
     if not ytdlp_cmd():
         raise ValueError("yt-dlp not installed (pip install yt-dlp)")
     code, out, err = run([*ytdlp_cmd(), "--flat-playlist", "--print",
@@ -1149,23 +1282,60 @@ def yt_broll(query, dest_dir: Path, stem: str, seconds: float):
             total = float(parts[0])
         except ValueError:
             continue
-        if total >= seconds + 20:
+        if total >= seconds + 30:   # room for the intro, the cut and the outro
             found.append((total, parts))
-    # multi-hour uploads are slow to cut from and often fail; titles that match the search win
-    found.sort(key=lambda f: (f[0] > 7200, -token_hits(query, {"title": f[1][2]})))
-    for total, parts in found:
-        # past the intro, before the outro: that's where the actual footage is
-        start = round(min(max(20.0, total * 0.3), total - seconds - 10), 1)
-        target = dest_dir / f"{stem}.mp4"
-        target.unlink(missing_ok=True)
-        code, _, err = run([*ytdlp_cmd(), "--no-playlist", "--quiet", "--no-warnings",
-                            "-f", "bv*[height<=1080][ext=mp4]/bv*[height<=1080]/b[height<=1080]",
-                            "--download-sections", f"*{start}-{start + seconds + 0.5}",
-                            "--remux-video", "mp4", "-o", str(target), parts[1]], timeout=240)
-        if code == 0 and target.exists() and target.stat().st_size > 50_000:
-            return target, {"title": parts[2], "creator": parts[3] or "YouTube",
-                            "license": "unknown (YouTube)", "page": parts[1], "url": parts[1]}
-    raise ValueError(f"no usable footage for '{query}'")
+    # multi-hour uploads are slow to cut from and often fail; news, lives and reactions come
+    # with a logo and their own subtitles; titles that match the search win
+    found.sort(key=lambda f: (f[0] > 7200, any(k in f[1][2].lower() for k in NOISY_TITLES),
+                              -token_hits(query, {"title": f[1][2]})))
+    spare = dest_dir / f"{stem}.first.mp4"
+    first, retries = None, 2
+    try:
+        for total, parts in found:
+            # past the intro, before the outro: that's where the actual footage is
+            start = round(max(0.0, min(max(20.0, total * 0.3), total - seconds - 10)), 1)
+            target.unlink(missing_ok=True)
+            code, _, err = run([*ytdlp_cmd(), "--no-playlist", "--quiet", "--no-warnings",
+                                "-f", "bv*[height<=1080][ext=mp4]/bv*[height<=1080]/b[height<=1080]",
+                                "--download-sections", f"*{start}-{start + seconds + 0.5}",
+                                "--remux-video", "mp4", "-o", str(target), parts[1]], timeout=240)
+            if code != 0 or not target.exists() or target.stat().st_size <= 50_000:
+                continue
+            meta = {"title": parts[2], "creator": parts[3] or "YouTube",
+                    "license": "unknown (YouTube)", "page": parts[1], "url": parts[1],
+                    "start": start, "end": round(start + seconds, 1)}
+            if corner_overlay(target):
+                meta["overlay"] = True
+                if first is None:
+                    os.replace(target, spare)
+                    first = meta
+                if retries > 0:
+                    retries -= 1
+                    continue   # look for a cleaner one, but not forever: every try is a download
+                break
+            first = None
+            break
+        else:
+            meta = None
+        if first is not None:   # nothing cleaner turned up: the first pick it is
+            os.replace(spare, target)
+            meta = first
+    finally:
+        spare.unlink(missing_ok=True)
+    if not meta or not target.exists():
+        raise ValueError(f"no usable footage for '{query}'")
+    note.write_text(json.dumps({"query": query, "seconds": seconds, "meta": meta},
+                               ensure_ascii=False), encoding="utf-8")
+    return target, meta
+
+
+def credit_line(c):
+    """One line of credits.txt: what, who, licence, where, and which seconds were used."""
+    line = (f"{c.get('title', '')} - {c.get('creator', '')} ({c.get('license', '')}) "
+            f"{c.get('page') or c.get('url', '')}")
+    if c.get("start") is not None:
+        line += f" [start={c['start']:g}s" + (f" end={c['end']:g}s]" if c.get("end") is not None else "]")
+    return line
 
 
 AUDIO_EXTS = (".mp3", ".ogg", ".oga", ".opus", ".wav", ".flac", ".m4a")
@@ -1244,6 +1414,10 @@ def cmd_fetch(args):
         name = clip.get("name") or f"clip-{i + 1:02d}"
         query = str(clip.get("query") or "").strip()
         video_q = str(clip.get("video") or "").strip()
+        listed = [clip["media"]] if isinstance(clip.get("media"), str) else (clip.get("media") or [])
+        if listed and not any((plan_path.parent / str(m)).exists() for m in listed):
+            print(f"  ! {name}: its media is gone (folder moved?) - fetching it again", file=sys.stderr)
+            clip.pop("media")
         if clip.get("chart") or clip.get("media") or not (query or video_q):
             continue
         credits = [c for c in credits if c.get("clip") != name]
@@ -1253,7 +1427,11 @@ def cmd_fetch(args):
                 path, meta = yt_broll(video_q, media_dir, f"{name}-v",
                                       beat_seconds(clip) + 1.0)
                 got.append(rel(path))
-                credits.append({"clip": name, **meta})
+                if meta.get("overlay"):
+                    print(f"  ! {name}: that footage has a channel logo in a top corner (see sheet.jpg). "
+                          "For clean footage add `b-roll`, `cinematic` or `free roam` to `video`.",
+                          file=sys.stderr)
+                credits.append({"clip": name, **{k: v for k, v in meta.items() if k != "overlay"}})
             except (OSError, ValueError) as exc:
                 print(f"  ! {name}: no footage ({exc})", file=sys.stderr)
         want = (max(0, args.n - 1) if got else args.n) if query else 0
@@ -1331,8 +1509,7 @@ def cmd_fetch(args):
     plan["credits"] = credits
     plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     if credits:
-        lines = [f"{c.get('title', '')} — {c.get('creator', '')} — {c.get('license', '')} — "
-                 f"{c.get('page') or c.get('url', '')}" for c in credits]
+        lines = [credit_line(c) for c in credits]
         (media_dir / "credits.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\n{filled} clip(s) with media, {len(credits)} credit(s) -> {media_dir}")
     picked = [m for c in clips for m in (c.get("media") or [])]
@@ -1435,7 +1612,8 @@ def beat_seconds(clip):
     if given > 0:
         return given
     words = f"{clip.get('title') or ''} {clip.get('script') or clip.get('narration') or ''}".strip()
-    return round(max(4.0, len(words) / 12 + 1.5), 1)
+    # 14 characters per second is the slow end of references/narration.md, plus air
+    return round(max(4.0, len(words) / 14 + 2.0), 1)
 
 
 def load_plan(path):
@@ -1490,6 +1668,10 @@ def load_plan(path):
         if media:
             clip["media"] = [str((plan_path.parent / str(m)).resolve() if not Path(str(m)).is_absolute()
                                  else Path(str(m))) for m in media]
+            gone = [Path(m).name for m in clip["media"] if not Path(m).exists()]
+            if gone:
+                print(f"  ! {clip['name']}: media not found ({', '.join(gone)}) - it will not be on "
+                      "screen. Moved the folder? Run `make` again.", file=sys.stderr)
     plan["_path"] = str(plan_path)
     return plan
 
@@ -1578,11 +1760,17 @@ def render_chart(chart, width, height, dur, out: Path, lang="es", fps=30):
     bg = Image.blend(bg, glow.filter(ImageFilter.GaussianBlur(int(180 * u))), 0.55)
 
     mx = int(W * 0.08)
-    title_font = font(66 * u)
     probe = ImageDraw.Draw(bg)
-    title_lines = wrap_px(probe, chart.get("title") or "", title_font, W - 2 * mx)[:3]
+    for title_px in (66, 58, 50, 44):   # a long title gets smaller before it gets cut
+        title_font = font(title_px * u)
+        title_lines = wrap_px(probe, chart.get("title") or "", title_font, W - 2 * mx)
+        if len(title_lines) <= 3:
+            break
+    if len(title_lines) > 3:
+        title_lines = title_lines[:3]
+        title_lines[2] = title_lines[2].rstrip(" .,;:") + "..."
     title_top = int(H * (0.12 if H > W else 0.08))
-    line_h = int(78 * u)
+    line_h = int(title_px * 1.18 * u)
     title_bottom = title_top + line_h * len(title_lines)
     area_top = title_bottom + int(70 * u) if title_lines else int(H * 0.16)
     area_bot = int(H * (0.70 if H > W else 0.74))
@@ -1601,6 +1789,12 @@ def render_chart(chart, width, height, dur, out: Path, lang="es", fps=30):
     grow = max(0.8, min(1.8, dur * 0.45))     # seconds an element takes to arrive
     items = len(chart.get("values") or chart.get("rows") or [1])
     stagger = min(0.22, dur * 0.3 / max(1, items))
+    # the last second belongs to the finished chart: half of it is the crossfade to the next
+    # beat, and a counter caught at 423 on its way to 425 is a wrong number on screen
+    room = max(0.5, dur - 1.0 - 0.45)
+    if grow + stagger * items > room:
+        shrink = room / (grow + stagger * items)
+        grow, stagger = grow * shrink, stagger * shrink
     anim_end = 0.35 + grow + stagger * items + 0.1
 
     def lerp_color(a, b, t):
@@ -2145,6 +2339,13 @@ def yt_music(query_or_url, dest_dir: Path, stem="music"):
     first for the words, which is routinely a copyrighted upload with a misleading
     title. An explicit URL is trusted as-is: the caller picked that exact track.
     """
+    note = dest_dir / f"{stem}.json"
+    try:   # the same track asked for again: it is already here
+        kept = json.loads(note.read_text(encoding="utf-8"))
+        if kept.get("query") == query_or_url and Path(kept["path"]).exists():
+            return Path(kept["path"]), kept["meta"]
+    except (OSError, ValueError, KeyError):
+        pass
     if not ytdlp_cmd():
         raise ValueError("yt-dlp not installed (pip install yt-dlp)")
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -2182,11 +2383,14 @@ def yt_music(query_or_url, dest_dir: Path, stem="music"):
                         "--audio-quality", "5", "-o", pattern, target])
     if code != 0:
         raise ValueError(err.strip()[:200] or "yt-dlp download failed")
-    found = sorted(dest_dir.glob(f"{stem}.*"))
+    found = sorted(f for f in dest_dir.glob(f"{stem}.*") if f.suffix.lower() in AUDIO_EXTS)
     if not found:
         raise ValueError("yt-dlp wrote no file")
-    return found[0], {"title": title, "creator": uploader, "page": page,
-                      "license": "royalty-free (credit the artist / NCS)"}
+    meta = {"title": title, "creator": uploader, "page": page,
+            "license": "royalty-free (credit the artist / NCS)"}
+    note.write_text(json.dumps({"query": query_or_url, "path": str(found[0]), "meta": meta},
+                               ensure_ascii=False), encoding="utf-8")
+    return found[0], meta
 
 
 def add_music(video: Path, music: Path, volume=0.08):
@@ -2347,8 +2551,7 @@ def cmd_render(args):
 
     credits = plan.get("credits") or []
     if credits and not args.dry_run:
-        lines = [f"{c.get('title', '')} - {c.get('creator', '')} ({c.get('license', '')}) "
-                 f"{c.get('page') or c.get('url', '')}" for c in credits]
+        lines = [credit_line(c) for c in credits]
         (out_dir / "credits.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
         manifest["credits"] = "credits.txt"
 
@@ -2391,6 +2594,8 @@ def plan_warnings(plan):
     render, and not at all.
     """
     out = []
+    if plan.get("source"):
+        return out   # an edit of a recording has no angle to argue and no reel shape to keep
     clips = [c for c in (plan.get("clips") or []) if isinstance(c, dict)]
     if not str(plan.get("angle") or "").strip():
         out.append("`angle` is empty: without one the video is a list of obvious facts. "
@@ -2399,18 +2604,30 @@ def plan_warnings(plan):
         out.append(f"only {len(clips)} beat(s): a reel needs 3-6, one idea each")
     if clips:
         last = clips[-1]
-        text = f"{last.get('title') or ''} {last.get('script') or last.get('narration') or ''}"
+        chart = last.get("chart") if isinstance(last.get("chart"), dict) else {}
+        text = (f"{last.get('title') or ''} {last.get('script') or last.get('narration') or ''} "
+                f"{chart.get('title') or ''} {chart.get('label') or ''}")
         if "?" not in text:
             out.append("the last beat has no question: end with one to the viewer")
     return out
 
 
+def loudness_of(path):
+    """Integrated loudness (LUFS) of a finished file, or None."""
+    _, _, err = run([FFMPEG, "-hide_banner", "-nostats", "-i", str(path), "-vn",
+                     "-af", "ebur128", "-f", "null", "-"], timeout=300)
+    found = re.findall(r"\bI:\s*(-?\d+(?:\.\d+)?)\s*LUFS", err)
+    return float(found[-1]) if found else None
+
+
 def cmd_make(args):
     """fetch + render + stitch in one call: the cheapest path for an agent."""
     plan_path = Path(args.plan).expanduser().resolve()
+    warnings = []
     try:
         ensure_deps()
-        for msg in plan_warnings(json.loads(plan_path.read_text(encoding="utf-8"))):
+        warnings = plan_warnings(json.loads(plan_path.read_text(encoding="utf-8")))
+        for msg in warnings:
             print(f"! {msg}", file=sys.stderr)
     except (OSError, ValueError):
         pass   # fetch reports a missing or broken plan properly
@@ -2446,8 +2663,17 @@ def cmd_make(args):
     except (OSError, ValueError):
         man = {}
     voices = sorted({str(c["voice"]) for c in man.get("clips", []) if c.get("voice")})
+    lufs = loudness_of(final)
+    layout = {1: "mono", 2: "stereo"}.get(info.get("audio_channels"), f"{info.get('audio_channels')}ch")
+    sound = f"{layout} {lufs:.1f} LUFS" if lufs is not None else ("NONE" if not info["has_audio"] else layout)
     print(f"\nvideo: {final.resolve()}  ({info['duration']:.1f}s, {info['width']}x{info['height']}, "
-          f"voice={'+'.join(voices) or 'none'}, music={'yes' if man.get('music') else 'NO'})")
+          f"voice={'+'.join(voices) or 'none'}, music={'yes' if man.get('music') else 'NO'}, "
+          f"audio={sound})")
+    # everything that went wrong is said again here, on stdout, where a redirected run still has it
+    for msg in warnings:
+        print(f"! plan: {msg}")
+    if not info["has_audio"] or info.get("audio_channels") != 2 or (lufs is not None and not -20 <= lufs <= -12):
+        print("! audio is off target (stereo, about -16 LUFS): run `verify` on the clips folder")
     if voices != ["edge"] and args.tts in (None, "auto", "edge"):
         print("! not the neural voice: `doctor --fix`, check the network, `make` again", file=sys.stderr)
     if not man.get("music"):
@@ -2471,11 +2697,14 @@ def cmd_selftest(args):
     out = restore_punctuation(said, "El juego está muerto. Ya pasó. ¿Tú lo juegas?")
     assert [w[2] for w in out] == ["El", "juego", "está", "muerto.", "Ya", "pasó.",
                                    "Tú", "lo", "juegas?"]
-    # a number is spoken as words: it never matches, and nothing is invented
-    assert [w[2] for w in restore_punctuation([("trescientos", 0, "trescientos"),
-                                               ("millones", 1, "millones")],
-                                              "300 millones vendidos.")] == \
-        ["trescientos", "millones"]
+    # a number is spoken as words and never matches: its full stop lands on the last word said
+    spoken = [(w, i, w) for i, w in enumerate("Llegó a trescientos Luego bajó".split())]
+    assert [w[2] for w in restore_punctuation(spoken, "Llegó a 300. Luego bajó.")] == \
+        ["Llegó", "a", "trescientos.", "Luego", "bajó."]
+    # an abbreviation is not the end of a sentence, a real full stop is
+    assert not ends_sentence("S.") and not ends_sentence("EE.UU.") and not ends_sentence("Dr.")
+    assert ends_sentence("juegas?") and ends_sentence("muerto.")
+    assert not plan_warnings({"source": "demo.mp4", "clips": [{"script": "a"}]})
     # a plan that will not land is called out before anything is downloaded
     assert any("angle" in w for w in plan_warnings({"clips": []}))
     assert any("question" in w for w in plan_warnings(
